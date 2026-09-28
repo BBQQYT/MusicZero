@@ -1,5 +1,5 @@
 [workspace]
-members = ["MCZ", "YMZ", "YouMZ"]
+members = ["MCZ", "YMZ", "YouMZ", "mz"]
 resolver = "2"
 
 [profile.release]

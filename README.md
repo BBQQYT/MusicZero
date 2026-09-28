@@ -1,23 +1,62 @@
 # MusicZero
 
 <p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/Language-English-blue?style=for-the-badge" alt="English" /></a>
-  <a href="README_RU.md"><img src="https://img.shields.io/badge/Язык-Русский-lightgrey?style=for-the-badge" alt="Русская версия" /></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/Language-English-lightgrey?style=for-the-badge" alt="English" /></a>
+  <a href="README_RU.md"><img src="https://img.shields.io/badge/Язык-Русский-red?style=for-the-badge" alt="Русская версия" /></a>
 </p>
 
-MusicZero is a lightweight Linux music player made of two service adapters and a shared Rust core:
+MusicZero is a lightweight modular music player written in Rust featuring a unified CLI and controller **`mz`**:
 
-- **YMZ** plays Yandex Music, including My Wave and the account's playlists.
-- **YouMZ** plays YouTube Music mixes, liked tracks, and saved playlists.
-- **MCZ (Music Core Zero)** provides shared playback, MPRIS controls, queue handling, configuration paths, and the optional system tray.
+- **`mz`** — unified CLI tool. Launches any provider **in one command with system tray included** and controls playback on the fly without extra tools.
+- **`YMZ`** — Yandex Music module ("My Vibe" stream, account playlists).
+- **`YouMZ`** — YouTube Music module ("My Supermix", custom playlists, library).
+- **`MCZ (Music Core Zero)`** — shared core: audio engine (rodio/symphonia), MPRIS v2, queue, configuration, and D-Bus StatusNotifierItem tray menu (ksni).
 
-The player runs without a browser window. The tray lets you switch playlists; YMZ also exposes My Wave mood, diversity, and language settings.
+No browser required. The tray icon spawns automatically along with the player daemon, offering playlist selection and Yandex Music "My Vibe" tuning.
 
-## Install from source
+---
 
-Install Rust with [rustup](https://rustup.rs), then install the native build dependencies for your distribution.
+## Quickstart
 
-| Distribution | Build dependencies |
+### Launching (Daemon + Tray in one command):
+
+```sh
+mz ymz        # Start Yandex Music (with tray)
+mz youmz      # Start YouTube Music (with tray)
+mz all        # Start both players concurrently
+```
+
+Pass `--no-tray` to run without a tray icon (e.g. on headless servers).
+
+### Playback control with `mz`:
+
+```sh
+mz toggle     # Play / Pause (also: mz play, mz pause, mz pp)
+mz next       # Next track (also: mz skip)
+mz prev       # Previous track
+mz stop       # Stop playback
+mz status     # Print active service, playback status, and current track
+```
+
+*The CLI automatically discovers the active running player. If both are running, specify a target: `mz next ymz` or `mz pause youmz`.*
+
+### Playlists & Tuning:
+
+```sh
+mz playlists        # List available playlists
+mz playlist 2       # Switch to playlist #2
+mz wave             # Show Yandex Music Wave settings (mood/diversity/language)
+mz wave mood calm   # Set wave mood: calm
+mz login            # Log in to YouTube Music
+```
+
+---
+
+## Installation
+
+Install Rust via [rustup](https://rustup.rs), then install build dependencies for your distro:
+
+| Distribution | Dependencies |
 | --- | --- |
 | Debian, Ubuntu, Linux Mint | `sudo apt install build-essential pkg-config libasound2-dev libsqlite3-dev` |
 | Fedora | `sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel sqlite-devel` |
@@ -25,98 +64,42 @@ Install Rust with [rustup](https://rustup.rs), then install the native build dep
 | openSUSE | `sudo zypper install gcc pkg-config alsa-devel sqlite3-devel` |
 | Alpine Linux | `sudo apk add build-base pkgconf alsa-lib-dev sqlite-dev` |
 
-Build the daemons and both tray programs:
+### Build and Install:
 
-```sh
-cargo build --workspace --release --features ymz/tray,youmz/tray
-```
-
-Or install all four executables under `~/.local/bin`:
+Install all binaries (`mz`, `ymz`, `youmz`, `ymz-tray`, `youmz-tray`) into `~/.local/bin`:
 
 ```sh
 ./install.sh
 ```
 
-Install both clients directly via Cargo:
+Or build manually via Cargo:
 
 ```sh
-cargo install --git https://github.com/BBQQYT/MusicZero.git ymz youmz --features tray --locked
+cargo build --workspace --release --features ymz/tray,youmz/tray,mz/tray
 ```
 
-Or individually:
+Or install `mz` directly with Cargo:
 
 ```sh
-cargo install --git https://github.com/BBQQYT/MusicZero.git ymz --features tray --locked
-cargo install --git https://github.com/BBQQYT/MusicZero.git youmz --features tray --locked
+cargo install --git https://github.com/BBQQYT/MusicZero.git mz --features tray --locked
 ```
 
-`install.sh` also accepts a custom prefix, for example `MUSICZERO_PREFIX=/usr/local ./install.sh`.
+---
 
-## Runtime requirements
+## Media Key Bindings (Sway / i3 / Hyprland)
 
-- A Linux audio output supported by ALSA/CPAL. PipeWire and PulseAudio installations usually provide an ALSA compatibility layer.
-- A user D-Bus session for MPRIS controls.
-- A StatusNotifierItem-compatible panel or tray host to show the optional tray icons.
-- `yt-dlp` on `PATH` for YouMZ audio downloads.
-- A Yandex Music OAuth token for YMZ and an authenticated YouTube Music session for YouMZ.
+`mz` makes binding media keys seamless:
 
-No particular init system is required. The optional tray programs communicate with their player over the user D-Bus session.
-
-## Configure YMZ
-
-Put the Yandex Music OAuth token in the XDG configuration directory and restrict access to it:
-
-```sh
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ymz"
-printf '%s\n' 'YOUR_YANDEX_TOKEN' > "${XDG_CONFIG_HOME:-$HOME/.config}/ymz/token"
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/ymz/token"
+```ini
+# Sway / i3
+bindsym XF86AudioPlay exec mz toggle
+bindsym XF86AudioNext exec mz next
+bindsym XF86AudioPrev exec mz prev
+bindsym XF86AudioStop exec mz stop
 ```
 
-`YM_TOKEN` can be used instead. YMZ starts with My Wave. The tray can select another playlist from the account and change My Wave settings.
-
-## Configure YouMZ
-
-The first run can use the login flow:
-
-```sh
-youmz login
-```
-
-You can also put an authenticated YouTube Music cookie in `${XDG_CONFIG_HOME:-$HOME/.config}/youmz/cookie`, with file permissions `600`. An optional proxy can be set in the `proxy` file or through `YOUMZ_PROXY`, for example `socks5h://127.0.0.1:2080`.
-
-YouMZ starts with **My Mix** (`RDMM`). Use the tray to select liked music or a saved playlist. The selected playlist is saved for the next start.
-
-## Run
-
-Start one player and, if desired, its tray program in the same desktop session:
-
-```sh
-ymz
-ymz-tray
-```
-
-or:
-
-```sh
-youmz
-youmz-tray
-```
-
-The tray is optional. Without it, use any MPRIS client, such as `playerctl`:
-
-```sh
-playerctl -p ymz play-pause
-playerctl -p youmz next
-```
-
-## Configuration locations
-
-On Linux, MusicZero follows `XDG_CONFIG_HOME` and `XDG_CACHE_HOME`. If those variables are unset, it uses `~/.config` and `~/.cache`.
-
-## Windows
-
-Windows support is incomplete. MCZ has portable profile paths and shutdown handling, but the player adapters still depend on Linux D-Bus and the native tray and media controls are not implemented for Windows.
+---
 
 ## License
 
-MusicZero is distributed under the MIT License. See the license files in the project directories.
+MusicZero is distributed under the MIT License.

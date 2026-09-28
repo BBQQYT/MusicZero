@@ -1,0 +1,22 @@
+[package]
+name = "mz"
+version = "0.2.0"
+edition = "2021"
+description = "Единая командная строка управления и запуска MusicZero (YMZ + YouMZ)"
+
+[features]
+default = ["tray"]
+tray = ["ymz/tray", "youmz/tray", "mcz/tray"]
+
+[dependencies]
+mcz = { path = "../MCZ" }
+ymz = { path = "../YMZ" }
+youmz = { path = "../YouMZ" }
+tokio = { version = "1", features = ["full"] }
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+log = "0.4"
+env_logger = "0.11"
+
+[[bin]]
+name = "mz"
+path = "src/main.rs"

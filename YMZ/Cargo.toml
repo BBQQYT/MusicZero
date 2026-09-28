@@ -20,6 +20,13 @@ log = "0.4"
 env_logger = "0.11"
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
 
+[lib]
+name = "ymz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ymz"
+path = "src/main.rs"
 
 [[bin]]
 name = "ymz-tray"

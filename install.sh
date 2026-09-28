@@ -10,12 +10,13 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 cargo build --manifest-path "$root/Cargo.toml" --workspace --release \
-    --features ymz/tray,youmz/tray
+    --features ymz/tray,youmz/tray,mz/tray
 
 mkdir -p "$prefix/bin"
-for binary in ymz ymz-tray youmz youmz-tray; do
+for binary in mz ymz ymz-tray youmz youmz-tray; do
     install -m 755 "$root/target/release/$binary" "$prefix/bin/$binary"
 done
 
 echo "Установлено в $prefix/bin"
-echo "Запустите ymz + ymz-tray или youmz + youmz-tray в одной пользовательской сессии."
+echo "Запуск: mz ymz (Яндекс Музыка) или mz youmz (YouTube Music) — трей включён сразу!"
+echo "Управление: mz toggle, mz next, mz prev, mz status, mz playlist, mz wave."
