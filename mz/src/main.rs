@@ -100,10 +100,20 @@ async fn run_youmz(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_all(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
-    println!("▶ Запуск YMZ и YouMZ одновременно...{}", if with_tray { " (с треями)" } else { "" });
+    println!("▶ Запуск YMZ и YouMZ одновременно...{}", if with_tray { " (с единым треем)" } else { "" });
+
+    #[cfg(all(feature = "tray", target_os = "linux"))]
+    if with_tray {
+        tokio::spawn(async move {
+            if let Err(e) = mcz::tray::run_unified().await {
+                log::warn!("Единый трей MusicZero завершил работу: {e}");
+            }
+        });
+    }
+
     tokio::select! {
-        res1 = ymz::run(with_tray) => res1,
-        res2 = youmz::run(with_tray) => res2,
+        res1 = ymz::run(false) => res1,
+        res2 = youmz::run(false) => res2,
     }
 }
 
@@ -265,27 +275,9 @@ async fn handle_wave(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn handle_tray(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let target = args.first().copied().unwrap_or("ymz");
-    if target == "youmz" || target == "youtube" {
-        println!("Запуск трея YouMZ...");
-        mcz::tray::run(mcz::tray::TrayConfig {
-            id: "youmz",
-            title: "YouMZ — YouTube Music",
-            service: "org.mpris.MediaPlayer2.youmz",
-            wave_settings: false,
-        })
-        .await
-    } else {
-        println!("Запуск трея YMZ...");
-        mcz::tray::run(mcz::tray::TrayConfig {
-            id: "ymz",
-            title: "YMZ — Яндекс Музыка",
-            service: "org.mpris.MediaPlayer2.ymz",
-            wave_settings: true,
-        })
-        .await
-    }
+async fn handle_tray(_args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Запуск единого трея MusicZero...");
+    mcz::tray::run_unified().await
 }
 
 async fn handle_default() -> Result<(), Box<dyn std::error::Error>> {
