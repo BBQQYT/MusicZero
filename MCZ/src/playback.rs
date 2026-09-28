@@ -15,20 +15,25 @@ pub fn spawn_commands(
     skip: Arc<AtomicBool>,
     duration_us: Arc<RwLock<i64>>,
     conn: Connection,
+    active: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
         while let Some(cmd) = rx.recv().await {
             let status = match cmd {
                 PlayerCommand::Play => {
+                    active.store(true, Ordering::SeqCst);
                     sink.play();
                     Some("Playing")
                 }
                 PlayerCommand::Pause => {
+                    active.store(false, Ordering::SeqCst);
                     sink.pause();
                     Some("Paused")
                 }
                 PlayerCommand::PlayPause => {
-                    if sink.is_paused() {
+                    let now = !active.load(Ordering::SeqCst);
+                    active.store(now, Ordering::SeqCst);
+                    if now {
                         sink.play();
                         Some("Playing")
                     } else {
@@ -37,11 +42,13 @@ pub fn spawn_commands(
                     }
                 }
                 PlayerCommand::Next => {
+                    active.store(true, Ordering::SeqCst);
                     skip.store(true, Ordering::SeqCst);
                     sink.stop();
                     None
                 }
                 PlayerCommand::Stop => {
+                    active.store(false, Ordering::SeqCst);
                     sink.stop();
                     Some("Stopped")
                 }

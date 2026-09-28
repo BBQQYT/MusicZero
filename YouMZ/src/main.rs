@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    youmz::run(with_tray).await
+    youmz::run(with_tray, false).await
 }
 
 fn print_help() {

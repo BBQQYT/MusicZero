@@ -89,18 +89,36 @@ fn with_tray_flag(args: &[&str]) -> bool {
 async fn run_ymz(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
     println!("▶ Запуск Яндекс Музыки (YMZ)...{}", if with_tray { " (с треем)" } else { "" });
-    ymz::run(with_tray).await
+    ymz::run(with_tray, false).await
 }
 
 async fn run_youmz(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
     println!("▶ Запуск YouTube Music (YouMZ)...{}", if with_tray { " (с треем)" } else { "" });
-    youmz::run(with_tray).await
+    youmz::run(with_tray, false).await
 }
 
 async fn run_all(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
-    println!("▶ Запуск YMZ и YouMZ одновременно...{}", if with_tray { " (с единым треем)" } else { "" });
+    let preferred = args.iter().find(|&&a| a != "--no-tray").copied().unwrap_or("ymz");
+    let (ymz_paused, youmz_paused) = if preferred == "youmz" || preferred == "youtube" {
+        (true, false)
+    } else {
+        (false, true)
+    };
+
+    let active_name = if ymz_paused {
+        "YouTube Music (YouMZ)"
+    } else {
+        "Яндекс Музыка (YMZ)"
+    };
+
+    println!(
+        "▶ Запуск YMZ и YouMZ одновременно...{}",
+        if with_tray { " (с единым треем)" } else { "" }
+    );
+    println!("  Активный источник: {active_name} (второй источник в режиме ожидания)");
+    println!("  Переключение источника доступно в трее или через `mz play <сервис>`\n");
 
     #[cfg(all(feature = "tray", target_os = "linux"))]
     if with_tray {
@@ -112,8 +130,8 @@ async fn run_all(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     tokio::select! {
-        res1 = ymz::run(false) => res1,
-        res2 = youmz::run(false) => res2,
+        res1 = ymz::run(false, ymz_paused) => res1,
+        res2 = youmz::run(false, youmz_paused) => res2,
     }
 }
 

@@ -77,15 +77,11 @@ impl MprisPlayer {
     }
 
     async fn pause(&self) {
-        if !self.sink.is_paused() {
-            let _ = self.cmd_tx.send(PlayerCommand::Pause);
-        }
+        let _ = self.cmd_tx.send(PlayerCommand::Pause);
     }
 
     async fn play(&self) {
-        if self.sink.is_paused() {
-            let _ = self.cmd_tx.send(PlayerCommand::Play);
-        }
+        let _ = self.cmd_tx.send(PlayerCommand::Play);
     }
 
     async fn stop(&self) {

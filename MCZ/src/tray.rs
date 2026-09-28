@@ -373,6 +373,35 @@ pub async fn run_unified() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await;
 
+        if ymz_owner && youmz_owner {
+            let ymz_playing = if let Ok(p) = player_for(&conn, YMZ_BUS).await {
+                p.get_property::<String>("PlaybackStatus").await.unwrap_or_default() == "Playing"
+            } else {
+                false
+            };
+            let youmz_playing = if let Ok(p) = player_for(&conn, YOUMZ_BUS).await {
+                p.get_property::<String>("PlaybackStatus").await.unwrap_or_default() == "Playing"
+            } else {
+                false
+            };
+
+            if youmz_playing && !ymz_playing && current_active != "youmz" {
+                let _ = handle
+                    .update(|t| {
+                        t.active_service = "youmz".into();
+                    })
+                    .await;
+                current_active = "youmz".into();
+            } else if ymz_playing && !youmz_playing && current_active != "ymz" {
+                let _ = handle
+                    .update(|t| {
+                        t.active_service = "ymz".into();
+                    })
+                    .await;
+                current_active = "ymz".into();
+            }
+        }
+
         let target_service = if current_active.is_empty() {
             if ymz_owner { "ymz".into() } else { "youmz".into() }
         } else {

@@ -16,12 +16,16 @@ use tokio::time::{sleep, Duration};
 use zbus::connection::Builder;
 use zbus::zvariant::Value;
 
-pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std::error::Error>> {
     let token = config::load_token()?;
     let ym = Arc::new(YandexClient::new(&token));
 
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Arc::new(Sink::try_new(&stream_handle)?);
+    let active = Arc::new(AtomicBool::new(!start_paused));
+    if start_paused {
+        sink.pause();
+    }
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<PlayerCommand>();
 
@@ -84,7 +88,15 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
         skip_flag.clone(),
         current_duration_us.clone(),
         conn.clone(),
+        active.clone(),
     );
+
+    if start_paused {
+        let mut changed = HashMap::new();
+        changed.insert("PlaybackStatus", Value::from("Paused"));
+        notify_changed(&conn, changed).await;
+        log::info!("YMZ запущен в режиме ожидания (на паузе)");
+    }
 
     #[cfg(all(feature = "tray", target_os = "linux"))]
     if with_tray {
@@ -110,6 +122,18 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut queue = Queue::new();
     'playback: loop {
+        while !active.load(Ordering::SeqCst) {
+            tokio::select! {
+                _ = &mut shutdown => return Ok(()),
+                Some(id) = switch_rx.recv() => {
+                    *playlist_id.write().await = id;
+                    queue.clear();
+                    sink.stop();
+                }
+                _ = sleep(Duration::from_millis(150)) => {}
+            }
+        }
+
         while let Ok(id) = switch_rx.try_recv() {
             *playlist_id.write().await = id;
             queue.clear();
@@ -144,6 +168,19 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
 
         queue.extend(entries.0);
         while let Some(entry) = queue.next() {
+            while !active.load(Ordering::SeqCst) {
+                tokio::select! {
+                    _ = &mut shutdown => return Ok(()),
+                    Some(id) = switch_rx.recv() => {
+                        *playlist_id.write().await = id;
+                        queue.clear();
+                        sink.stop();
+                        continue 'playback;
+                    }
+                    _ = sleep(Duration::from_millis(150)) => {}
+                }
+            }
+
             if let Ok(id) = switch_rx.try_recv() {
                 *playlist_id.write().await = id;
                 queue.clear();
@@ -223,7 +260,11 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
             skip_flag.store(false, Ordering::SeqCst);
             sink.stop();
             sink.append(source);
-            sink.play();
+            if active.load(Ordering::SeqCst) {
+                sink.play();
+            } else {
+                sink.pause();
+            }
             if let Some(batch) = &entries.1 {
                 ym.send_feedback(batch, &track.id, "trackStarted").await;
             }
@@ -241,7 +282,7 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(batch) = &entries.1 { ym.send_feedback(batch, &track.id, "skip").await; }
                             break;
                         }
-                        if sink.empty() {
+                        if sink.empty() && active.load(Ordering::SeqCst) {
                             if let Some(batch) = &entries.1 { ym.send_feedback(batch, &track.id, "trackFinished").await; }
                             break;
                         }

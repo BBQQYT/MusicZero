@@ -40,7 +40,7 @@ fn mark_failure(failures: &mut HashMap<String, u32>, history: &mut History, trac
     }
 }
 
-pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Arc::new(config::load()?);
     log::info!("Плейлист: {} (RDMM = Мой джем)", cfg.playlist_id);
 
@@ -61,6 +61,10 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink = Arc::new(Sink::try_new(&stream_handle)?);
+    let active = Arc::new(AtomicBool::new(!start_paused));
+    if start_paused {
+        sink.pause();
+    }
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<PlayerCommand>();
 
@@ -136,7 +140,15 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
         skip_flag.clone(),
         current_duration_us.clone(),
         conn.clone(),
+        active.clone(),
     );
+
+    if start_paused {
+        let mut changed = HashMap::new();
+        changed.insert("PlaybackStatus", Value::from("Paused"));
+        notify_changed(&conn, changed).await;
+        log::info!("YouMZ запущен в режиме ожидания (на паузе)");
+    }
 
     #[cfg(all(feature = "tray", target_os = "linux"))]
     if with_tray {
@@ -183,6 +195,22 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Запуск воспроизведения «Мой джем»");
 
     loop {
+        while !active.load(Ordering::SeqCst) {
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    sink.stop();
+                    log::info!("Завершение работы youmz");
+                    return Ok(());
+                }
+                Some(new_id) = switch_rx.recv() => {
+                    *playlist_id.write().await = new_id;
+                    queue.clear();
+                    history.clear();
+                }
+                _ = sleep(Duration::from_millis(150)) => {}
+            }
+        }
+
         // Подгружаем партию треков, когда очередь пуста
         if queue.tracks.is_empty() {
             let current_playlist = playlist_id.read().await.clone();
@@ -244,6 +272,24 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
             Some(t) => t,
             None => continue,
         };
+
+        while !active.load(Ordering::SeqCst) {
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    sink.stop();
+                    log::info!("Завершение работы youmz");
+                    return Ok(());
+                }
+                Some(new_id) = switch_rx.recv() => {
+                    *playlist_id.write().await = new_id;
+                    queue.clear();
+                    history.clear();
+                    skip_flag.store(false, Ordering::SeqCst);
+                    continue;
+                }
+                _ = sleep(Duration::from_millis(150)) => {}
+            }
+        }
 
         let duration_us = track.duration_us;
 
@@ -357,7 +403,11 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
 
         sink.stop();
         sink.append(source);
-        sink.play();
+        if active.load(Ordering::SeqCst) {
+            sink.play();
+        } else {
+            sink.pause();
+        }
 
         // Цикл ожидания конца трека / скипа / завершения
         loop {
@@ -385,7 +435,7 @@ pub async fn run(with_tray: bool) -> Result<(), Box<dyn std::error::Error>> {
                         sink.stop();
                         break;
                     }
-                    if sink.empty() {
+                    if sink.empty() && active.load(Ordering::SeqCst) {
                         yt.forget(&track.video_id).await;
                         break;
                     }
