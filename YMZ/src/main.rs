@@ -21,6 +21,25 @@ use zbus::zvariant::Value;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "help" | "--help" | "-h" => {
+                print_help();
+                return Ok(());
+            }
+            "version" | "--version" | "-V" => {
+                println!("ymz {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            unknown => {
+                eprintln!("Неизвестная команда или флаг: {unknown}\n");
+                print_help();
+                std::process::exit(1);
+            }
+        }
+    }
+
     let token = config::load_token()?;
     let ym = Arc::new(YandexClient::new(&token));
 
@@ -240,4 +259,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("Завершение работы ymz");
     Ok(())
+}
+
+fn print_help() {
+    println!(
+        "YMZ v{} — легковесный headless-клиент Яндекс Музыки (MPRIS v2)\n\n\
+Использование:\n  \
+  ymz [КОМАНДА]\n\n\
+Команды:\n  \
+  (без аргументов)    Запустить плеер (фоновый демон)\n  \
+  help, --help, -h    Показать эту справку\n  \
+  version, --version  Показать версию\n\n\
+Управление воспроизведением:\n  \
+  playerctl -p ymz play-pause\n  \
+  playerctl -p ymz next\n  \
+  playerctl -p ymz previous\n  \
+  или через трей: `ymz-tray`",
+        env!("CARGO_PKG_VERSION")
+    );
 }

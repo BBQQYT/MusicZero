@@ -44,11 +44,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
-    // `youmz login` — вход в аккаунт через окно YouTube Music (как в limusic):
-    // открывается отдельный бинарник youmz-login с настоящим WebKit-окном,
-    // пользователь входит привычным путём, программа забирает cookie.
-    if args.iter().any(|a| a == "login" || a == "--login") {
-        return login_command().await;
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "login" | "--login" => return login_command().await,
+            "help" | "--help" | "-h" => {
+                print_help();
+                return Ok(());
+            }
+            "version" | "--version" | "-V" => {
+                println!("youmz {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            unknown => {
+                eprintln!("Неизвестная команда или флаг: {unknown}\n");
+                print_help();
+                std::process::exit(1);
+            }
+        }
     }
 
     let cfg = Arc::new(config::load()?);
@@ -428,4 +440,23 @@ async fn login_command() -> Result<(), Box<dyn std::error::Error>> {
     auth::interactive_login(&proxy, &auth::load_client_id(), &auth::load_client_secret()).await?;
     println!("Готово! Cookie сохранён, можно запускать youmz");
     Ok(())
+}
+
+fn print_help() {
+    println!(
+        "YouMZ v{} — легковесный headless-клиент YouTube Music (MPRIS v2)\n\n\
+Использование:\n  \
+  youmz [КОМАНДА]\n\n\
+Команды:\n  \
+  (без аргументов)    Запустить плеер (фоновый демон)\n  \
+  login, --login      Войти в YouTube Music через окно WebKit или консольную ссылку\n  \
+  help, --help, -h    Показать эту справку\n  \
+  version, --version  Показать версию\n\n\
+Управление воспроизведением:\n  \
+  playerctl -p youmz play-pause\n  \
+  playerctl -p youmz next\n  \
+  playerctl -p youmz previous\n  \
+  или через трей: `youmz-tray`",
+        env!("CARGO_PKG_VERSION")
+    );
 }

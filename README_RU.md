@@ -37,10 +37,17 @@ cargo build --workspace --release --features ymz/tray,youmz/tray
 ./install.sh
 ```
 
-После публикации новой версии Cargo сможет собрать и установить оба клиента одной командой:
+Установить оба клиента напрямую через Cargo:
 
 ```sh
-cargo install --git https://github.com/BBQQYT/MusicZero.git ymz youmz --features ymz/tray,youmz/tray --locked
+cargo install --git https://github.com/BBQQYT/MusicZero.git ymz youmz --features tray --locked
+```
+
+Или по отдельности:
+
+```sh
+cargo install --git https://github.com/BBQQYT/MusicZero.git ymz --features tray --locked
+cargo install --git https://github.com/BBQQYT/MusicZero.git youmz --features tray --locked
 ```
 
 Для другого каталога установки можно задать префикс, например `MUSICZERO_PREFIX=/usr/local ./install.sh`.

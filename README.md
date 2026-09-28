@@ -37,10 +37,17 @@ Or install all four executables under `~/.local/bin`:
 ./install.sh
 ```
 
-After publishing a new version, Cargo can build and install both adapters in one command:
+Install both clients directly via Cargo:
 
 ```sh
-cargo install --git https://github.com/BBQQYT/MusicZero.git ymz youmz --features ymz/tray,youmz/tray --locked
+cargo install --git https://github.com/BBQQYT/MusicZero.git ymz youmz --features tray --locked
+```
+
+Or individually:
+
+```sh
+cargo install --git https://github.com/BBQQYT/MusicZero.git ymz --features tray --locked
+cargo install --git https://github.com/BBQQYT/MusicZero.git youmz --features tray --locked
 ```
 
 `install.sh` also accepts a custom prefix, for example `MUSICZERO_PREFIX=/usr/local ./install.sh`.
