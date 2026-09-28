@@ -1,5 +1,10 @@
 # MusicZero
 
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/Language-English-lightgrey?style=for-the-badge" alt="English" /></a>
+  <a href="README_RU.md"><img src="https://img.shields.io/badge/Язык-Русский-red?style=for-the-badge" alt="Русская версия" /></a>
+</p>
+
 MusicZero — лёгкий музыкальный плеер из двух сервисных клиентов и общего ядра на Rust:
 
 - **YMZ** воспроизводит Яндекс Музыку, включая «Мою волну» и плейлисты аккаунта.
