@@ -1,0 +1,27 @@
+[package]
+name = "ymz"
+version = "0.2.0"
+edition = "2021"
+
+[features]
+tray = ["mcz/tray"]
+
+[dependencies]
+mcz = { path = "../MCZ" }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+roxmltree = "0.20"
+md-5 = "0.10"
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+
+
+[[bin]]
+name = "ymz-tray"
+path = "src/bin/ymz-tray.rs"
+required-features = ["tray"]

@@ -1,0 +1,22 @@
+# Сборка Rust / Cargo
+/target/
+Cargo.lock
+
+# Переменные окружения и секреты (токены Яндекса)
+.env
+*.env
+.env.*
+
+# Системные и временные файлы
+*.log
+*.tmp
+*.swp
+*~
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+target/
+.cache/
