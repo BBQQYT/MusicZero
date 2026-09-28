@@ -93,7 +93,7 @@ cargo install --git https://github.com/BBQQYT/MusicZero.git mz --features tray -
 
 ### Releases
 
-Pushing a tag beginning with `v` (for example `v0.2.1`) builds Linux and Windows archives in GitHub Actions and publishes both to the tag's GitHub Release after both builds succeed.
+Every successful push to `main` or `master` builds Linux and Windows archives and publishes an automatic prerelease. Pushing a tag beginning with `v` (for example `v0.2.1`) publishes a versioned release after both builds succeed.
 
 ---
 

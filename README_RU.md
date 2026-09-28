@@ -100,7 +100,7 @@ cargo install --git https://github.com/BBQQYT/MusicZero.git youmz --features tra
 
 ### Автоматические релизы
 
-При отправке тега с префиксом `v`, например `v0.2.1`, GitHub Actions собирает архивы Linux и Windows и публикует их в GitHub Releases после успешной сборки обеих платформ.
+Каждый успешный push в `main` или `master` публикует архивы Linux и Windows как предварительный релиз. Тег с префиксом `v`, например `v0.2.1`, публикует обычный релиз после успешной сборки обеих платформ.
 
 Для другого каталога установки можно задать префикс: `MUSICZERO_PREFIX=/usr/local ./install.sh`.
 
