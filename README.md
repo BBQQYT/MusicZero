@@ -1,5 +1,10 @@
 # MusicZero
 
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/Language-English-blue?style=for-the-badge" alt="English" /></a>
+  <a href="README_RU.md"><img src="https://img.shields.io/badge/Язык-Русский-lightgrey?style=for-the-badge" alt="Русская версия" /></a>
+</p>
+
 MusicZero is a lightweight Linux music player made of two service adapters and a shared Rust core:
 
 - **YMZ** plays Yandex Music, including My Wave and the account's playlists.
@@ -7,8 +12,6 @@ MusicZero is a lightweight Linux music player made of two service adapters and a
 - **MCZ (Music Core Zero)** provides shared playback, MPRIS controls, queue handling, configuration paths, and the optional system tray.
 
 The player runs without a browser window. The tray lets you switch playlists; YMZ also exposes My Wave mood, diversity, and language settings.
-
-[Русская версия](README_RU.md)
 
 ## Install from source
 
