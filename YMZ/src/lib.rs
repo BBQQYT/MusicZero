@@ -3,20 +3,27 @@ pub mod config;
 pub mod control;
 
 use api::YandexClient;
-use mcz::mpris::{build_metadata_map, notify_changed, MprisPlayer, MprisRoot, PlayerCommand};
+use mcz::mpris::PlayerCommand;
+#[cfg(not(windows))]
+use mcz::mpris::{build_metadata_map, notify_changed, MprisPlayer, MprisRoot};
 use mcz::playback::spawn_commands;
 use mcz::queue::Queue;
 use rodio::{Decoder, OutputStream, Sink};
+#[cfg(not(windows))]
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
+#[cfg(not(windows))]
 use zbus::connection::Builder;
+#[cfg(not(windows))]
 use zbus::zvariant::Value;
 
 pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    let _ = with_tray;
     let token = config::load_token()?;
     let ym = Arc::new(YandexClient::new(&token));
 
@@ -35,6 +42,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
     let current_track_id = Arc::new(RwLock::new("0".to_string()));
     let current_duration_us = Arc::new(RwLock::new(0i64));
 
+    #[cfg(not(windows))]
     let mpris_player = MprisPlayer {
         cmd_tx: cmd_tx.clone(),
         sink: sink.clone(),
@@ -47,6 +55,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
         track_path_prefix: "/org/ymz/Track",
     };
 
+    #[cfg(not(windows))]
     let conn = Builder::session()?
         .name("org.mpris.MediaPlayer2.ymz")?
         .serve_at(
@@ -60,6 +69,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
         .build()
         .await?;
 
+    #[cfg(not(windows))]
     log::info!("D-Bus шина org.mpris.MediaPlayer2.ymz зарегистрирована");
 
     let skip_flag = Arc::new(AtomicBool::new(false));
@@ -68,6 +78,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
         ym.get_wave_settings().await.unwrap_or_default(),
     ));
     let (switch_tx, mut switch_rx) = mpsc::unbounded_channel::<String>();
+    #[cfg(not(windows))]
     conn.object_server()
         .at(
             "/org/mcz/Control",
@@ -82,19 +93,108 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
         )
         .await?;
 
+    #[cfg(windows)]
+    {
+        let control = Arc::new(control::YmzControl {
+            ym: ym.clone(),
+            switch_tx: switch_tx.clone(),
+            playlist_id: playlist_id.clone(),
+            wave: wave.clone(),
+            current_title: current_title.clone(),
+            current_artist: current_artist.clone(),
+        });
+        let sink = sink.clone();
+        let active = active.clone();
+        let cmd_tx = cmd_tx.clone();
+        tokio::spawn(async move {
+            let result = mcz::windows::serve("ymz", move |request| {
+                let control = control.clone();
+                let sink = sink.clone();
+                let active = active.clone();
+                let cmd_tx = cmd_tx.clone();
+                async move {
+                    use mcz::windows::Response;
+                    let mut response = Response::default();
+                    match request.action.as_str() {
+                        "ping" => {}
+                        "status" | "playlists" => {
+                            response.status = if !active.load(Ordering::SeqCst) {
+                                "Paused"
+                            } else if sink.empty() {
+                                "Stopped"
+                            } else {
+                                "Playing"
+                            }
+                            .into();
+                            (response.artist, response.title) = control.now_playing().await;
+                            response.playlist_id = control.current_playlist().await;
+                            response.playlists = control.list_playlists().await;
+                            response.wave = Some(control.wave_settings().await);
+                        }
+                        "wave" => response.wave = Some(control.wave_settings().await),
+                        "set_playlist" => {
+                            if let Err(e) = control.set_playlist(&request.value).await {
+                                response.error = Some(e.to_string());
+                            }
+                        }
+                        "set_wave" => {
+                            if let Err(e) =
+                                control.set_wave_setting(&request.key, &request.value).await
+                            {
+                                response.error = Some(e.to_string());
+                            }
+                        }
+                        action => {
+                            let command = match action {
+                                "play" => Some(PlayerCommand::Play),
+                                "pause" => Some(PlayerCommand::Pause),
+                                "toggle" => Some(PlayerCommand::PlayPause),
+                                "next" => Some(PlayerCommand::Next),
+                                "stop" => Some(PlayerCommand::Stop),
+                                _ => None,
+                            };
+                            if let Some(command) = command {
+                                let _ = cmd_tx.send(command);
+                            } else {
+                                response.error = Some(format!("Unknown command: {action}"));
+                            }
+                        }
+                    }
+                    response
+                }
+            })
+            .await;
+            if let Err(e) = result {
+                log::error!("Windows control pipe: {e}");
+            }
+        });
+    }
+
     spawn_commands(
         cmd_rx,
         sink.clone(),
         skip_flag.clone(),
         current_duration_us.clone(),
-        conn.clone(),
+        {
+            #[cfg(not(windows))]
+            {
+                Some(conn.clone())
+            }
+            #[cfg(windows)]
+            {
+                None
+            }
+        },
         active.clone(),
     );
 
     if start_paused {
-        let mut changed = HashMap::new();
-        changed.insert("PlaybackStatus", Value::from("Paused"));
-        notify_changed(&conn, changed).await;
+        #[cfg(not(windows))]
+        {
+            let mut changed = HashMap::new();
+            changed.insert("PlaybackStatus", Value::from("Paused"));
+            notify_changed(&conn, changed).await;
+        }
         log::info!("YMZ запущен в режиме ожидания (на паузе)");
     }
 
@@ -242,6 +342,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
             *current_art_url.write().await = cover_url.clone();
             *current_duration_us.write().await = duration_us;
 
+            #[cfg(not(windows))]
             let meta = build_metadata_map(
                 &track.title,
                 &artist_name,
@@ -251,10 +352,13 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
                 "https://music.yandex.ru/album/0/track/",
                 "/org/ymz/Track",
             );
-            let mut changed = HashMap::new();
-            changed.insert("Metadata", Value::from(meta));
-            changed.insert("PlaybackStatus", Value::from("Playing"));
-            notify_changed(&conn, changed).await;
+            #[cfg(not(windows))]
+            {
+                let mut changed = HashMap::new();
+                changed.insert("Metadata", Value::from(meta));
+                changed.insert("PlaybackStatus", Value::from("Playing"));
+                notify_changed(&conn, changed).await;
+            }
 
             log::info!("▶ {} — {}", artist_name, track.title);
             skip_flag.store(false, Ordering::SeqCst);

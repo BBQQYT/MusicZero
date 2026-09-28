@@ -8,7 +8,9 @@ pub mod decoder;
 
 use crate::decoder::Decoder as SymphoniaDecoder;
 use api::{is_bot_check, History, Track, YtClient};
-use mcz::mpris::{build_metadata_map, notify_changed, MprisPlayer, MprisRoot, PlayerCommand};
+use mcz::mpris::PlayerCommand;
+#[cfg(not(windows))]
+use mcz::mpris::{build_metadata_map, notify_changed, MprisPlayer, MprisRoot};
 use mcz::playback::spawn_commands;
 use mcz::queue::Queue;
 use rodio::{OutputStream, Sink};
@@ -18,7 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
+#[cfg(not(windows))]
 use zbus::connection::Builder;
+#[cfg(not(windows))]
 use zbus::zvariant::Value;
 
 /// Сколько раз подряд партия может состоять только из уже проигранного,
@@ -41,6 +45,8 @@ fn mark_failure(failures: &mut HashMap<String, u32>, history: &mut History, trac
 }
 
 pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    let _ = with_tray;
     let cfg = Arc::new(config::load()?);
     log::info!("Плейлист: {} (RDMM = Мой джем)", cfg.playlist_id);
 
@@ -79,7 +85,9 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
     let (switch_tx, mut switch_rx) = mpsc::unbounded_channel::<String>();
 
     // Имя на шине может ещё висеть на прошлом процессе при быстром рестарте
+    #[cfg(not(windows))]
     let mut conn = None;
+    #[cfg(not(windows))]
     for attempt in 0..10 {
         let mpris_player = MprisPlayer {
             cmd_tx: cmd_tx.clone(),
@@ -128,25 +136,102 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
             Err(e) => return Err(e.into()),
         }
     }
+    #[cfg(not(windows))]
     let conn = conn.ok_or("Не удалось занять D-Bus имя после 10 попыток")?;
 
+    #[cfg(not(windows))]
     log::info!("D-Bus шина org.mpris.MediaPlayer2.youmz зарегистрирована");
 
     let skip_flag = Arc::new(AtomicBool::new(false));
+
+    #[cfg(windows)]
+    {
+        let control = Arc::new(control::YoumzControl {
+            yt: yt.as_ref().clone(),
+            switch_tx: switch_tx.clone(),
+            playlist_id: playlist_id.clone(),
+            current_title: current_title.clone(),
+            current_artist: current_artist.clone(),
+        });
+        let sink = sink.clone();
+        let active = active.clone();
+        let cmd_tx = cmd_tx.clone();
+        tokio::spawn(async move {
+            let result = mcz::windows::serve("youmz", move |request| {
+                let control = control.clone();
+                let sink = sink.clone();
+                let active = active.clone();
+                let cmd_tx = cmd_tx.clone();
+                async move {
+                    use mcz::windows::Response;
+                    let mut response = Response::default();
+                    match request.action.as_str() {
+                        "ping" => {}
+                        "status" | "playlists" => {
+                            response.status = if !active.load(Ordering::SeqCst) {
+                                "Paused"
+                            } else if sink.empty() {
+                                "Stopped"
+                            } else {
+                                "Playing"
+                            }
+                            .into();
+                            (response.artist, response.title) = control.now_playing().await;
+                            response.playlist_id = control.current_playlist().await;
+                            response.playlists = control.list_playlists().await;
+                        }
+                        "set_playlist" => control.set_playlist(&request.value).await,
+                        action => {
+                            let command = match action {
+                                "play" => Some(PlayerCommand::Play),
+                                "pause" => Some(PlayerCommand::Pause),
+                                "toggle" => Some(PlayerCommand::PlayPause),
+                                "next" => Some(PlayerCommand::Next),
+                                "stop" => Some(PlayerCommand::Stop),
+                                _ => None,
+                            };
+                            if let Some(command) = command {
+                                let _ = cmd_tx.send(command);
+                            } else {
+                                response.error = Some(format!("Unknown command: {action}"));
+                            }
+                        }
+                    }
+                    response
+                }
+            })
+            .await;
+            if let Err(e) = result {
+                log::error!("Windows control pipe: {e}");
+            }
+        });
+    }
 
     spawn_commands(
         cmd_rx,
         sink.clone(),
         skip_flag.clone(),
         current_duration_us.clone(),
-        conn.clone(),
+        {
+            #[cfg(not(windows))]
+            {
+                Some(conn.clone())
+            }
+            #[cfg(windows)]
+            {
+                None
+            }
+        },
         active.clone(),
     );
 
     if start_paused {
-        let mut changed = HashMap::new();
-        changed.insert("PlaybackStatus", Value::from("Paused"));
-        notify_changed(&conn, changed).await;
+        #[cfg(not(windows))]
+        {
+            let mut changed = HashMap::new();
+            changed.insert("PlaybackStatus", Value::from("Paused"));
+            notify_changed(&conn, changed).await;
+        }
         log::info!("YouMZ запущен в режиме ожидания (на паузе)");
     }
 
@@ -380,6 +465,7 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
         *current_art_url.write().await = art_url.clone();
         *current_duration_us.write().await = duration_us;
 
+        #[cfg(not(windows))]
         let meta = build_metadata_map(
             &track.title,
             &track.artist,
@@ -389,10 +475,13 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
             "https://www.youtube.com/watch?v=",
             "/org/youmz/Track",
         );
-        let mut changed = HashMap::new();
-        changed.insert("Metadata", Value::from(meta));
-        changed.insert("PlaybackStatus", Value::from("Playing"));
-        notify_changed(&conn, changed).await;
+        #[cfg(not(windows))]
+        {
+            let mut changed = HashMap::new();
+            changed.insert("Metadata", Value::from(meta));
+            changed.insert("PlaybackStatus", Value::from("Playing"));
+            notify_changed(&conn, changed).await;
+        }
 
         log::info!("▶ {} — {}", track.artist, track.title);
 
@@ -447,9 +536,15 @@ pub async fn run(with_tray: bool, start_paused: bool) -> Result<(), Box<dyn std:
 
 pub async fn login() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
-    let gui_bin = exe.with_file_name("youmz-login");
+    let gui_bin = exe.with_file_name(if cfg!(windows) {
+        "youmz-login.exe"
+    } else {
+        "youmz-login"
+    });
 
-    let display_ok = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
+    let display_ok = cfg!(windows)
+        || std::env::var("DISPLAY").is_ok()
+        || std::env::var("WAYLAND_DISPLAY").is_ok();
 
     if gui_bin.exists() && display_ok {
         println!("Открываю окно входа в YouTube Music…");

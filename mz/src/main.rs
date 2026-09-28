@@ -1,3 +1,7 @@
+#[cfg(not(windows))]
+mod client;
+#[cfg(windows)]
+#[path = "windows_client.rs"]
 mod client;
 
 use client::{DbusClient, StatusInfo, YMZ_SERVICE};
@@ -83,24 +87,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn with_tray_flag(args: &[&str]) -> bool {
-    !args.contains(&"--no-tray")
+    cfg!(target_os = "linux") && !args.contains(&"--no-tray")
 }
 
 async fn run_ymz(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
-    println!("▶ Запуск Яндекс Музыки (YMZ)...{}", if with_tray { " (с треем)" } else { "" });
+    println!(
+        "▶ Запуск Яндекс Музыки (YMZ)...{}",
+        if with_tray { " (с треем)" } else { "" }
+    );
     ymz::run(with_tray, false).await
 }
 
 async fn run_youmz(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
-    println!("▶ Запуск YouTube Music (YouMZ)...{}", if with_tray { " (с треем)" } else { "" });
+    println!(
+        "▶ Запуск YouTube Music (YouMZ)...{}",
+        if with_tray { " (с треем)" } else { "" }
+    );
     youmz::run(with_tray, false).await
 }
 
 async fn run_all(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let with_tray = with_tray_flag(args);
-    let preferred = args.iter().find(|&&a| a != "--no-tray").copied().unwrap_or("ymz");
+    let preferred = args
+        .iter()
+        .find(|&&a| a != "--no-tray")
+        .copied()
+        .unwrap_or("ymz");
     let (ymz_paused, youmz_paused) = if preferred == "youmz" || preferred == "youtube" {
         (true, false)
     } else {
@@ -115,10 +129,14 @@ async fn run_all(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "▶ Запуск YMZ и YouMZ одновременно...{}",
-        if with_tray { " (с единым треем)" } else { "" }
+        if with_tray {
+            " (с единым треем)"
+        } else {
+            ""
+        }
     );
     println!("  Активный источник: {active_name} (второй источник в режиме ожидания)");
-    println!("  Переключение источника доступно в трее или через `mz play <сервис>`\n");
+    println!("  Переключение источника: `mz play <сервис>`\n");
 
     #[cfg(all(feature = "tray", target_os = "linux"))]
     if with_tray {
@@ -156,7 +174,10 @@ async fn handle_playback(action: &str, args: &[&str]) -> Result<(), Box<dyn std:
         }
         "toggle" => {
             client.play_pause(service).await?;
-            let status = client.get_playback_status(service).await.unwrap_or_default();
+            let status = client
+                .get_playback_status(service)
+                .await
+                .unwrap_or_default();
             println!("⏯ Play/Pause: {status} [{label}]");
         }
         "next" => {
@@ -254,9 +275,16 @@ async fn handle_set_playlist(args: &[&str]) -> Result<(), Box<dyn std::error::Er
         selector.to_string()
     };
 
-    let name = list.iter().find(|(id, _)| id == &target_id).map(|(_, n)| n.as_str()).unwrap_or(&target_id);
+    let name = list
+        .iter()
+        .find(|(id, _)| id == &target_id)
+        .map(|(_, n)| n.as_str())
+        .unwrap_or(&target_id);
     client.set_playlist(service, &target_id).await?;
-    println!("🔀 Плейлист переключён на: «{}» (ID: {}) [{label}]", name, target_id);
+    println!(
+        "🔀 Плейлист переключён на: «{}» (ID: {}) [{label}]",
+        name, target_id
+    );
     Ok(())
 }
 
@@ -294,8 +322,15 @@ async fn handle_wave(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_tray(_args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Запуск единого трея MusicZero...");
-    mcz::tray::run_unified().await
+    #[cfg(all(feature = "tray", target_os = "linux"))]
+    {
+        println!("Запуск единого трея MusicZero...");
+        mcz::tray::run_unified().await
+    }
+    #[cfg(not(all(feature = "tray", target_os = "linux")))]
+    {
+        Err("Трей доступен только в Linux".into())
+    }
 }
 
 async fn handle_default() -> Result<(), Box<dyn std::error::Error>> {
@@ -305,7 +340,7 @@ async fn handle_default() -> Result<(), Box<dyn std::error::Error>> {
         print_status_info(&info);
         println!("\nБыстрые команды:");
         println!("  mz toggle         Play / Pause");
-        println!("  mz next / prev    Следующий / предыдущий трек");
+        println!("  mz next           Следующий трек");
         println!("  mz playlists      Список плейлистов");
         println!("  mz help           Все команды");
     } else {
@@ -319,18 +354,17 @@ fn print_help() {
         "MusicZero (mz) v{} — единая модульная система управления и запуска музыки\n\n\
 Использование:\n  \
   mz <КОМАНДА> [ПАРАМЕТРЫ]\n\n\
-Запуск плееров (сразу с треем):\n  \
-  mz ymz              Запустить Яндекс Музыку (+ трей)\n  \
-  mz youmz            Запустить YouTube Music (+ трей)\n  \
+Запуск плееров (трей в Linux):\n  \
+  mz ymz              Запустить Яндекс Музыку\n  \
+  mz youmz            Запустить YouTube Music\n  \
   mz all              Запустить оба сервиса одновременно\n  \
   mz login            Войти в аккаунт YouTube Music\n  \
-  --no-tray           (флаг к запуску) запустить без трея\n\n\
+  --no-tray           (Linux) запустить без трея\n\n\
 Управление воспроизведением:\n  \
   mz play             Возобновить воспроизведение\n  \
   mz pause            Поставить на паузу\n  \
   mz toggle (или pp)  Переключить Play/Pause\n  \
   mz next (или skip)  Следующий трек\n  \
-  mz prev             Предыдущий трек\n  \
   mz stop             Остановить воспроизведение\n  \
   mz status           Показать текущий трек и статус\n\n\
 Плейлисты и настройки:\n  \

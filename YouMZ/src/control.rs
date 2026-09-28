@@ -25,7 +25,7 @@ pub struct YoumzControl {
 impl YoumzControl {
     /// Список плейлистов пользователя: «Мой джем», «Понравившаяся музыка»
     /// и собственные плейлисты из библиотеки.
-    async fn list_playlists(&self) -> Vec<(String, String)> {
+    pub async fn list_playlists(&self) -> Vec<(String, String)> {
         // «Мой джем» всегда первый — это персональный микс
         let mut list = vec![("RDMM".to_string(), "Мой джем".to_string())];
 
@@ -49,7 +49,7 @@ impl YoumzControl {
 
     /// Переключиться на другой плейлист. Очередь сбрасывается,
     /// текущий трек скипается.
-    async fn set_playlist(&self, id: &str) {
+    pub async fn set_playlist(&self, id: &str) {
         log::info!("Трей запросил плейлист: {id}");
         if let Err(e) = std::fs::create_dir_all(mcz::paths::config_dir("youmz")) {
             log::warn!("Не создать каталог настроек: {e}");
@@ -63,12 +63,12 @@ impl YoumzControl {
     }
 
     /// Текущий плейлист
-    async fn current_playlist(&self) -> String {
+    pub async fn current_playlist(&self) -> String {
         self.playlist_id.read().await.clone()
     }
 
     /// Что сейчас играет: (исполнитель, название)
-    async fn now_playing(&self) -> (String, String) {
+    pub async fn now_playing(&self) -> (String, String) {
         (
             self.current_artist.read().await.clone(),
             self.current_title.read().await.clone(),

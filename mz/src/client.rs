@@ -48,13 +48,13 @@ impl DbusClient {
 
         if let Some(pref) = preferred {
             let pref_lower = pref.to_lowercase();
-            if pref_lower.contains("ymz") || pref_lower.contains("yandex") {
-                if ymz_running {
-                    return Some((YMZ_SERVICE, "Яндекс Музыка (YMZ)"));
-                }
-            } else if pref_lower.contains("youmz") || pref_lower.contains("youtube") {
+            if pref_lower.contains("youmz") || pref_lower.contains("youtube") {
                 if youmz_running {
                     return Some((YOUMZ_SERVICE, "YouTube Music (YouMZ)"));
+                }
+            } else if pref_lower.contains("ymz") || pref_lower.contains("yandex") {
+                if ymz_running {
+                    return Some((YMZ_SERVICE, "Яндекс Музыка (YMZ)"));
                 }
             }
         }

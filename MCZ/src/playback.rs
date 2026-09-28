@@ -14,7 +14,7 @@ pub fn spawn_commands(
     sink: Arc<Sink>,
     skip: Arc<AtomicBool>,
     duration_us: Arc<RwLock<i64>>,
-    conn: Connection,
+    conn: Option<Connection>,
     active: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
@@ -56,7 +56,9 @@ pub fn spawn_commands(
                     let total = *duration_us.read().await;
                     let target = (sink.get_pos().as_micros() as i64 + offset).clamp(0, total);
                     if sink.try_seek(Duration::from_micros(target as u64)).is_ok() {
-                        notify_seeked(&conn, target).await;
+                        if let Some(conn) = &conn {
+                            notify_seeked(conn, target).await;
+                        }
                     }
                     None
                 }
@@ -64,15 +66,17 @@ pub fn spawn_commands(
                     let total = *duration_us.read().await;
                     let target = position.clamp(0, total);
                     if sink.try_seek(Duration::from_micros(target as u64)).is_ok() {
-                        notify_seeked(&conn, target).await;
+                        if let Some(conn) = &conn {
+                            notify_seeked(conn, target).await;
+                        }
                     }
                     None
                 }
             };
-            if let Some(status) = status {
+            if let (Some(status), Some(conn)) = (status, &conn) {
                 let mut changed = HashMap::new();
                 changed.insert("PlaybackStatus", Value::from(status));
-                notify_changed(&conn, changed).await;
+                notify_changed(conn, changed).await;
             }
         }
     });

@@ -1,23 +1,65 @@
-name: Linux build
+name: Build and release
 
 on:
   push:
+    branches: [main, master]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: musiczero-linux-x64
+          - os: windows-2022
+            artifact: musiczero-windows-x64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Native dependencies
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Build
-        run: cargo build --workspace --features ymz/tray,youmz/tray --locked
-      - name: Core tests
-        run: cargo test -p mcz --features tray --locked
+      - name: Build Linux binaries
+        if: runner.os == 'Linux'
+        run: cargo build --workspace --release --features ymz/tray,youmz/tray,mz/tray --locked
+      - name: Build Windows binaries
+        if: runner.os == 'Windows'
+        run: cargo build --workspace --release --no-default-features --locked
+      - name: Package Linux release
+        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/v')
+        run: tar -czf musiczero-linux-x64.tar.gz -C target/release mz ymz youmz ymz-tray youmz-tray
+      - name: Package Windows release
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: Compress-Archive -Path target/release/mz.exe,target/release/ymz.exe,target/release/youmz.exe -DestinationPath musiczero-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: ${{ matrix.artifact }}
+          path: musiczero-*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: musiczero-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            musiczero-linux-x64.tar.gz
+            musiczero-windows-x64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

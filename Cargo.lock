@@ -2095,6 +2095,7 @@ version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2169,6 +2170,8 @@ dependencies = [
  "ksni",
  "log",
  "rodio",
+ "serde",
+ "serde_json",
  "tokio",
  "zbus 4.4.0",
 ]
@@ -3895,6 +3898,7 @@ dependencies = [
  "objc2-foundation",
  "once_cell",
  "parking_lot",
+ "raw-window-handle",
  "tao-macros",
  "unicode-segmentation",
  "url",

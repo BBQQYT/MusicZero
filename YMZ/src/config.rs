@@ -24,7 +24,10 @@ pub fn load_token() -> Result<String, String> {
         }
     }
 
-    Err("Токен не найден! Создайте ~/.config/ymz/token с правами 600 или передайте YM_TOKEN".into())
+    Err(format!(
+        "Токен не найден! Создайте {} или передайте YM_TOKEN",
+        config_dir("ymz").join("token").display()
+    ))
 }
 
 pub fn load_playlist() -> String {

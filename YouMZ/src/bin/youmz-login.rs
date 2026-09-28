@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
@@ -172,11 +173,14 @@ fn save_cookie(cookie: &str) -> Result<PathBuf, String> {
     let path = dir.join(youmz::auth::COOKIE_FILE);
     std::fs::write(&path, cookie).map_err(|e| format!("{}: {e}", path.display()))?;
 
-    let mut perms = std::fs::metadata(&path)
-        .map_err(|e| e.to_string())?
-        .permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    }
 
     Ok(path)
 }

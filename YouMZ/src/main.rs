@@ -34,18 +34,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_help() {
     println!(
-        "YouMZ v{} — легковесный headless-клиент YouTube Music (MPRIS v2)\n\n\
+        "YouMZ v{} — легковесный клиент YouTube Music\n\n\
 Использование:\n  \
   youmz [КОМАНДА / ФЛАГИ]\n\n\
 Команды и флаги:\n  \
-  (без аргументов)    Запустить плеер сразу с треем\n  \
-  login, --login      Войти в YouTube Music через окно WebKit или консольную ссылку\n  \
-  --no-tray           Запустить плеер без иконки в трее\n  \
+  (без аргументов)    Запустить плеер (трей в Linux)\n  \
+  login, --login      Войти в YouTube Music\n  \
+  --no-tray           Запустить без трея в Linux\n  \
   help, --help, -h    Показать эту справку\n  \
   version, --version  Показать версию\n\n\
 Управление воспроизведением:\n  \
-  mz play-pause / mz next / mz prev / mz status\n  \
-  или через трей в системной панели",
+  mz toggle / mz next / mz status\n  \
+  или через трей в Linux",
         env!("CARGO_PKG_VERSION")
     );
 }

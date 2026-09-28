@@ -14,7 +14,7 @@ pub struct YmzControl {
 
 #[interface(name = "org.mcz.Control")]
 impl YmzControl {
-    async fn list_playlists(&self) -> Vec<(String, String)> {
+    pub async fn list_playlists(&self) -> Vec<(String, String)> {
         match self.ym.list_playlists().await {
             Ok(list) => list,
             Err(e) => {
@@ -24,7 +24,7 @@ impl YmzControl {
         }
     }
 
-    async fn set_playlist(&self, id: &str) -> zbus::fdo::Result<()> {
+    pub async fn set_playlist(&self, id: &str) -> zbus::fdo::Result<()> {
         if id != "wave"
             && id
                 .strip_prefix("playlist:")
@@ -45,22 +45,22 @@ impl YmzControl {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    async fn current_playlist(&self) -> String {
+    pub async fn current_playlist(&self) -> String {
         self.playlist_id.read().await.clone()
     }
-    async fn now_playing(&self) -> (String, String) {
+    pub async fn now_playing(&self) -> (String, String) {
         (
             self.current_artist.read().await.clone(),
             self.current_title.read().await.clone(),
         )
     }
 
-    async fn wave_settings(&self) -> (String, String, String) {
+    pub async fn wave_settings(&self) -> (String, String, String) {
         let w = self.wave.read().await;
         (w.mood.clone(), w.diversity.clone(), w.language.clone())
     }
 
-    async fn set_wave_setting(&self, key: &str, value: &str) -> zbus::fdo::Result<()> {
+    pub async fn set_wave_setting(&self, key: &str, value: &str) -> zbus::fdo::Result<()> {
         let mut settings = self.wave.read().await.clone();
         match key {
             "mood" => settings.mood = value.into(),

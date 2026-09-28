@@ -15,6 +15,7 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -154,9 +155,12 @@ fn write_file(name: &str, content: &str) -> Result<(), String> {
         fs::File::create(&path).map_err(|e| format!("Не создать {}: {e}", path.display()))?;
     file.write_all(content.as_bytes())
         .map_err(|e| format!("Не удалось записать {}: {e}", path.display()))?;
-    let mut perms = file.metadata().map_err(|e| e.to_string())?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        let mut perms = file.metadata().map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -185,6 +189,7 @@ pub fn ensure_netscape_cookie_file() -> Option<PathBuf> {
         log::warn!("Не удалось записать cookies.txt: {e}");
         return None;
     }
+    #[cfg(unix)]
     if let Ok(meta) = fs::metadata(&path) {
         let mut perms = meta.permissions();
         perms.set_mode(0o600);
