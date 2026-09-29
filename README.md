@@ -16,7 +16,15 @@ Only one player runs. The host starts a provider process for a request, receives
 
 ## Use
 
-Download and extract the complete `musiczero` folder from [Releases](https://github.com/BBQQYT/MusicZero/releases). YouMZ requires `yt-dlp` on `PATH`. Linux needs an audio device and a user D-Bus session for MPRIS and the tray.
+**Linux x86_64 — one command** (requires `curl` and Python 3.8+):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+```
+
+The installer finds the newest published release, verifies its SHA-256 digest, and places `mz`, YMZ, and YouMZ under `~/.local/bin`. Running it again updates the official files while preserving custom module folders. If `~/.local/bin` is outside `PATH`, it prints the full command to run.
+
+For manual installation, download and extract the complete `musiczero` folder from [Releases](https://github.com/BBQQYT/MusicZero/releases). YouMZ requires `yt-dlp` on `PATH`. Linux needs an audio device and a user D-Bus session for MPRIS and the tray.
 
 ```sh
 mz modules
@@ -76,4 +84,4 @@ A complete dependency free Rust example is in [examples/module-template](example
 cargo build --workspace --release --locked
 ```
 
-Linux needs `pkg-config` and ALSA development headers. `./install.sh` installs `mz` and its `modules` folder together under `~/.local/bin`. Successful `main` builds publish prereleases; `v*` tags publish versioned Linux and Windows archives.
+Building on Linux needs `pkg-config` and ALSA development headers. `./install.sh` builds from source and installs `mz` and its `modules` folder under `~/.local/bin`. Successful `main` builds publish prereleases; `v*` tags publish versioned Linux and Windows archives.

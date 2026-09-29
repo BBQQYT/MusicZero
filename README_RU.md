@@ -18,7 +18,15 @@ musiczero/
 
 ## Установка и запуск
 
-Скачайте архив для своей системы из [Releases](https://github.com/BBQQYT/MusicZero/releases) и распакуйте папку `musiczero` целиком. Для Linux нужна аудиосистема ALSA/PipeWire и пользовательская D-Bus сессия для MPRIS и трея. Для YouMZ установите `yt-dlp` и добавьте его в `PATH`.
+**Linux x86_64 — установка одной командой** (нужны `curl` и Python 3.8+):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+```
+
+Скрипт берёт последний опубликованный релиз, проверяет SHA-256 и устанавливает `mz` с YMZ и YouMZ в `~/.local/bin`. Повторный запуск обновляет их; папки собственных модулей сохраняются. Если `~/.local/bin` не входит в `PATH`, скрипт напечатает полный путь для запуска.
+
+Для ручной установки скачайте архив из [Releases](https://github.com/BBQQYT/MusicZero/releases) и распакуйте папку `musiczero` целиком. Для Linux нужна аудиосистема ALSA/PipeWire и пользовательская D-Bus сессия для MPRIS и трея. Для YouMZ установите `yt-dlp` и добавьте его в `PATH`.
 
 ```sh
 mz modules              # список доступных модулей
@@ -79,4 +87,4 @@ mz quit
 cargo build --workspace --release --locked
 ```
 
-На Linux нужны `pkg-config` и `libasound2-dev` (или аналоги вашего дистрибутива). Для установки в `~/.local/bin` используйте `./install.sh`: он разместит `mz` и папку `modules` вместе. Автоматические сборки `main` публикуются как предварительные релизы; теги `v*` создают обычные релизы с архивами Linux и Windows.
+Для сборки на Linux нужны `pkg-config` и `libasound2-dev` (или аналоги вашего дистрибутива). `./install.sh` собирает проект из исходников и устанавливает его в `~/.local/bin`. Автоматические сборки `main` публикуются как предварительные релизы; теги `v*` создают обычные релизы с архивами Linux и Windows.
