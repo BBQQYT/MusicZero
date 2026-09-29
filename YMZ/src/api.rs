@@ -362,19 +362,26 @@ impl YandexClient {
         Ok(format!("https://{host}/get-mp3/{hash}/{ts}{path}"))
     }
 
-    pub async fn download_audio(
+    pub async fn stream_audio(
         &self,
         stream_url: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use tokio::io::AsyncWriteExt;
         let mut delay = Duration::from_millis(500);
         for attempt in 1..=4 {
             match self.client.get(stream_url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let bytes = resp.bytes().await?.to_vec();
-                    if bytes.is_empty() {
+                Ok(mut resp) if resp.status().is_success() => {
+                    let mut stdout = tokio::io::stdout();
+                    let mut written = 0usize;
+                    while let Some(chunk) = resp.chunk().await? {
+                        stdout.write_all(&chunk).await?;
+                        written += chunk.len();
+                    }
+                    stdout.flush().await?;
+                    if written == 0 {
                         return Err("Пустой аудиопоток".into());
                     }
-                    return Ok(bytes);
+                    return Ok(());
                 }
                 Ok(resp) => log::warn!("audio HTTP {} attempt {attempt}/4", resp.status()),
                 Err(e) => log::warn!("audio network {e} attempt {attempt}/4"),

@@ -8,7 +8,7 @@ mod paths;
 use api::YandexClient;
 use serde_json::json;
 use std::error::Error;
-use std::io::{self, Write};
+use std::io;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -83,9 +83,7 @@ async fn main() -> Result<()> {
                 "audio" => {
                     let id = arg(&args, 2, "track id")?;
                     let url = client.get_stream_url(id).await?;
-                    let audio = client.download_audio(&url).await?;
-                    io::stdout().lock().write_all(&audio)?;
-                    Ok(())
+                    client.stream_audio(&url).await
                 }
                 "settings" => {
                     let wave = client.get_wave_settings().await?;

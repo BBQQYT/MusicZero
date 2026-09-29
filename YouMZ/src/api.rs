@@ -1,12 +1,10 @@
-//! Получение треков и аудиопотоков через rustypipe.
+//! Получение метаданных YouTube Music через rustypipe.
 //!
 //! rustypipe берёт на себя всю работу с InnerTube: deobfuscation подписей,
 //! PO-токены, visitorData и переключение клиентов. Нам остаётся только
-//! выбрать подходящий аудиопоток и скачать его.
+//! Аудио модуль передаёт в хост отдельным потоком через yt-dlp.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use rustypipe::client::{RustyPipe, RustyPipeBuilder};
 use rustypipe::model::TrackItem;
@@ -49,13 +47,6 @@ pub struct Track {
 pub struct YtClient {
     /// Клиент rustypipe: забирает миксы и метаданные библиотеки
     rp: Arc<RustyPipe>,
-    cfg: Arc<Config>,
-    /// HTTP-клиент (с настроенным прокси) для скачивания обложек и др. ресурсов
-    http: reqwest::Client,
-    /// Кэш предзагруженных аудиоданных: video_id -> байты
-    cache: Arc<tokio::sync::Mutex<HashMap<String, Vec<u8>>>>,
-    inflight: Arc<tokio::sync::Mutex<HashSet<String>>>,
-    prefetch_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl YtClient {
@@ -69,10 +60,6 @@ impl YtClient {
             }
             b
         };
-
-        let http = make_builder()
-            .build()
-            .expect("Не удалось создать HTTP-клиент");
 
         let client_builder = make_builder();
 
@@ -93,14 +80,7 @@ impl YtClient {
             }
         }
 
-        Self {
-            rp: Arc::new(rp),
-            cfg: cfg.clone(),
-            http,
-            cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            inflight: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
-            prefetch_semaphore: Arc::new(tokio::sync::Semaphore::new(cfg.prefetch_concurrency)),
-        }
+        Self { rp: Arc::new(rp) }
     }
 
     /// Получить партию треков микса (радио). RDMM = «Мой джем».
@@ -153,169 +133,6 @@ impl YtClient {
             return Err("Микс вернул 0 треков".to_string());
         }
         Ok(tracks)
-    }
-
-    /// Скачать аудио в память через yt-dlp (или взять из кэша предзагрузки).
-    pub async fn fetch_audio(&self, video_id: &str) -> Result<Vec<u8>, String> {
-        if let Some(bytes) = self.cache.lock().await.get(video_id).cloned() {
-            return Ok(bytes);
-        }
-
-        let _permit = self
-            .prefetch_semaphore
-            .acquire()
-            .await
-            .map_err(|_| "prefetch semaphore закрыт".to_string())?;
-        let cookie_path = crate::auth::ensure_netscape_cookie_file();
-        let attempts = self.cfg.retry_attempts.max(1);
-        let mut delay = Duration::from_millis(500);
-
-        for attempt in 1..=attempts {
-            let mut cmd = tokio::process::Command::new("yt-dlp");
-            cmd.arg("-f")
-                .arg("140/ba/bestaudio")
-                .arg("--no-playlist")
-                .arg("--no-warnings")
-                .arg("--no-progress")
-                .arg("-o")
-                .arg("-")
-                .arg(format!("https://www.youtube.com/watch?v={video_id}"));
-            if let Some(ref cp) = cookie_path {
-                cmd.arg("--cookies").arg(cp);
-            }
-            if let Some(ref proxy) = self.cfg.proxy {
-                cmd.arg("--proxy").arg(proxy);
-            }
-
-            match tokio::time::timeout(
-                Duration::from_secs(self.cfg.request_timeout_secs),
-                cmd.output(),
-            )
-            .await
-            {
-                Ok(Ok(output)) if output.status.success() && !output.stdout.is_empty() => {
-                    return Ok(output.stdout);
-                }
-                Ok(Ok(output)) => {
-                    let err = String::from_utf8_lossy(&output.stderr);
-                    log::warn!("yt-dlp ({video_id}) attempt {attempt}/{attempts}: {err}");
-                }
-                Ok(Err(e)) => log::warn!("yt-dlp ({video_id}) attempt {attempt}/{attempts}: {e}"),
-                Err(_) => log::warn!(
-                    "yt-dlp ({video_id}) timeout {}s, attempt {attempt}/{attempts}",
-                    self.cfg.request_timeout_secs
-                ),
-            }
-            if attempt < attempts {
-                tokio::time::sleep(delay).await;
-                delay = (delay * 2).min(Duration::from_secs(8));
-            }
-        }
-        Err(format!(
-            "yt-dlp ({video_id}): exhausted {} attempts",
-            attempts
-        ))
-    }
-
-    /// Предзагрузить следующий трек и его обложку в фон, чтобы скип был мгновенным
-    pub fn try_preload(self: &Arc<Self>, track: Track) {
-        let client = self.clone();
-        tokio::spawn(async move {
-            if client.cache.lock().await.contains_key(&track.video_id) {
-                return;
-            }
-            {
-                let mut inflight = client.inflight.lock().await;
-                if !inflight.insert(track.video_id.clone()) {
-                    return;
-                }
-            }
-
-            let video_id = track.video_id.clone();
-            let art_url = track.art_url.clone();
-            let cover_client = client.clone();
-            tokio::spawn(async move {
-                let _ = cover_client
-                    .fetch_and_cache_cover(&video_id, &art_url)
-                    .await;
-            });
-
-            let result = client.fetch_audio(&track.video_id).await;
-            client.inflight.lock().await.remove(&track.video_id);
-
-            match result {
-                Ok(bytes) => {
-                    let mut cache = client.cache.lock().await;
-                    while cache.len() >= client.cfg.prefetch_count {
-                        if let Some(key) = cache.keys().next().cloned() {
-                            cache.remove(&key);
-                        } else {
-                            break;
-                        }
-                    }
-                    cache.insert(track.video_id.clone(), bytes);
-                    log::info!("⚡ Предзагружен: {} — {}", track.artist, track.title);
-                }
-                Err(e) => log::warn!("Предзагрузка «{} — {}»: {e}", track.artist, track.title),
-            }
-        });
-    }
-
-    /// Скачать и сохранить обложку трека локально в ~/.cache/youmz/covers,
-    /// вернув file:// URI. Dank Linux (шторка QuickShell) и системные виджеты
-    /// требуют локальный файл, так как не могут сами загрузить URL через прокси.
-    pub async fn fetch_and_cache_cover(&self, video_id: &str, art_url: &str) -> Option<String> {
-        if art_url.is_empty() {
-            return None;
-        }
-
-        let covers_dir = crate::auth::covers_dir();
-        let _ = tokio::fs::create_dir_all(&covers_dir).await;
-        let file_path = covers_dir.join(format!("{video_id}.jpg"));
-
-        if file_path.exists() {
-            return Some(format!("file://{}", file_path.display()));
-        }
-
-        match self
-            .http
-            .get(art_url)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(bytes) = resp.bytes().await {
-                    if !bytes.is_empty() && tokio::fs::write(&file_path, &bytes).await.is_ok() {
-                        log::debug!("Сохранена обложка для {video_id}: {}", file_path.display());
-                        return Some(format!("file://{}", file_path.display()));
-                    }
-                }
-            }
-            Ok(resp) => {
-                log::warn!(
-                    "Не удалось скачать обложку для {video_id}: HTTP {}",
-                    resp.status()
-                );
-            }
-            Err(e) => {
-                log::warn!("Ошибка загрузки обложки для {video_id}: {e}");
-            }
-        }
-
-        Some(art_url.to_string())
-    }
-
-    /// Забрать предзагруженные байты, если они есть
-    pub async fn take_cached(&self, video_id: &str) -> Option<Vec<u8>> {
-        let mut cache = self.cache.lock().await;
-        cache.remove(video_id)
-    }
-
-    /// Освободить кэш трека (после воспроизведения)
-    pub async fn forget(&self, video_id: &str) {
-        let mut cache = self.cache.lock().await;
-        cache.remove(video_id);
     }
 
     /// Список плейлистов пользователя для меню в трее.

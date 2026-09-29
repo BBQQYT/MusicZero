@@ -10,7 +10,8 @@ mod paths;
 use api::YtClient;
 use serde_json::json;
 use std::error::Error;
-use std::io::{self, Write};
+use std::io;
+use std::process::Stdio;
 use std::sync::Arc;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -25,6 +26,36 @@ fn print_json(value: serde_json::Value) -> Result<()> {
     serde_json::to_writer(io::stdout().lock(), &value)?;
     println!();
     Ok(())
+}
+
+async fn stream_audio(video_id: &str, proxy: Option<&str>) -> Result<()> {
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg("-f")
+        .arg("140/ba/bestaudio")
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("--no-progress")
+        .arg("-o")
+        .arg("-")
+        .arg(format!("https://www.youtube.com/watch?v={video_id}"));
+    if let Some(cookie_path) = auth::ensure_netscape_cookie_file() {
+        cmd.arg("--cookies").arg(cookie_path);
+    }
+    if let Some(proxy) = proxy {
+        cmd.arg("--proxy").arg(proxy);
+    }
+    let status = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .status()
+        .await?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("yt-dlp exited: {status}").into())
+    }
 }
 
 #[tokio::main]
@@ -52,6 +83,9 @@ async fn main() -> Result<()> {
         .cookie
         .clone()
         .ok_or("YouTube Music: run `mz login youmz` first")?;
+    if command == "audio" {
+        return stream_audio(arg(&args, 2, "track id")?, cfg.proxy.as_deref()).await;
+    }
     let yt = YtClient::new(cfg.clone(), auth::Auth::Cookie(cookie)).await;
     match command {
         "playlists" => {
@@ -75,12 +109,6 @@ async fn main() -> Result<()> {
                 })
                 .collect::<Vec<_>>();
             print_json(json!({"tracks": tracks}))
-        }
-        "audio" => {
-            let id = arg(&args, 2, "track id")?;
-            let bytes = yt.fetch_audio(id).await?;
-            io::stdout().lock().write_all(&bytes)?;
-            Ok(())
         }
         _ => Err(format!("Unknown command: {command}").into()),
     }

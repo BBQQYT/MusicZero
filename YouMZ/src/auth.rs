@@ -173,7 +173,12 @@ pub fn load_cookie_file() -> Option<String> {
 /// (требуется для yt-dlp и других инструментов).
 pub fn ensure_netscape_cookie_file() -> Option<PathBuf> {
     let cookie_str = load_cookie_file()?;
-    let path = config_dir().join("cookies.txt");
+    let dir = config_dir();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        log::warn!("Не удалось создать {}: {e}", dir.display());
+        return None;
+    }
+    let path = dir.join("cookies.txt");
     let mut out = String::from("# Netscape HTTP Cookie File\n");
     for part in cookie_str.split(';') {
         let part = part.trim();
