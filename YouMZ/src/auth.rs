@@ -125,12 +125,12 @@ fn extract_sapisid(cookie: &str) -> Option<String> {
 
 /// Каталог конфигурации: $XDG_CONFIG_HOME/youmz или ~/.config/youmz
 pub fn config_dir() -> PathBuf {
-    mcz::paths::config_dir(APP_DIR)
+    crate::paths::config_dir(APP_DIR)
 }
 
 /// Cache location across XDG Linux desktops and Windows profiles.
 pub fn covers_dir() -> PathBuf {
-    mcz::paths::cache_dir(APP_DIR).join("covers")
+    crate::paths::cache_dir(APP_DIR).join("covers")
 }
 
 fn read_file(name: &str, env_var: &str) -> Option<String> {

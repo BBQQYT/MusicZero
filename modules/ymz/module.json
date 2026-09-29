@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "ymz",
+  "name": "Яндекс Музыка",
+  "binary": "ymz-module",
+  "default_playlist": "wave"
+}

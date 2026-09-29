@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "demo",
+  "name": "Demo Tone",
+  "binary": "demo-module",
+  "default_playlist": "demo"
+}

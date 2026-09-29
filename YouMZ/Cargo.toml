@@ -3,32 +3,20 @@ name = "youmz"
 version = "0.1.0"
 edition = "2021"
 description = "Ультралегковесный headless-клиент YouTube Music как сервис (MPRIS v2)"
-
-[features]
-# Графический вход в YouTube Music (окно WebKit). Демон не нуждается в WebKit,
-# поэтому зависимости опциональны и подключаются только для бинарника youmz-login.
-gui-login = ["dep:tao", "dep:wry"]
-# Иконка в системном трее с меню выбора плейлиста (бинарник youmz-tray).
-# ksni — чистый Rust, StatusNotifierItem по D-Bus, без GTK.
-tray = ["mcz/tray"]
+autolib = false
+autobins = false
+autoexamples = false
 
 [dependencies]
-mcz = { path = "../MCZ" }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "socks"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
 log = "0.4"
 env_logger = "0.11"
 rusqlite = { version = "0.31", default-features = false }
-tao = { version = "0.34", default-features = false, features = ["x11", "rwh_06"], optional = true }
-wry = { version = "0.54", default-features = false, features = ["os-webview", "protocol", "linux-body"], optional = true }
 sha1 = "0.10"
 data-encoding = "2"
-regex = "1"
-zbus = { version = "4.4", default-features = false, features = ["tokio"] }
-symphonia = { version = "0.5", default-features = false, features = ["mpa", "isomp4", "aac", "vorbis", "flac", "pcm", "wav"] }
 urlencoding = "2.1.3"
 rustypipe = { version = "0.11.4", features = ["userdata"] }
 
@@ -38,15 +26,5 @@ rusqlite = { version = "0.31", default-features = false, features = ["bundled"] 
 
 
 [[bin]]
-name = "youmz"
-path = "src/main.rs"
-
-[[bin]]
-name = "youmz-login"
-path = "src/bin/youmz-login.rs"
-required-features = ["gui-login"]
-
-[[bin]]
-name = "youmz-tray"
-path = "src/bin/youmz-tray.rs"
-required-features = ["tray"]
+name = "youmz-module"
+path = "src/bin/youmz-module.rs"

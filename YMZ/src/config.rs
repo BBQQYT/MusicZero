@@ -1,4 +1,4 @@
-use mcz::paths::config_dir;
+use crate::paths::config_dir;
 use std::env;
 use std::fs;
 

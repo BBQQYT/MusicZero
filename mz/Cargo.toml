@@ -1,19 +1,22 @@
 [package]
 name = "mz"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "Единая командная строка управления и запуска MusicZero (YMZ + YouMZ)"
+description = "MusicZero host and shared audio engine"
 
 [features]
 default = ["tray"]
-tray = ["ymz/tray", "youmz/tray", "mcz/tray"]
+tray = ["dep:ksni"]
 
 [dependencies]
 mcz = { path = "../MCZ" }
-ymz = { path = "../YMZ" }
-youmz = { path = "../YouMZ" }
 tokio = { version = "1", features = ["full"] }
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+ksni = { version = "0.3", default-features = false, features = ["tokio"], optional = true }
 log = "0.4"
 env_logger = "0.11"
 

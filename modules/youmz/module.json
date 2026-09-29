@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "youmz",
+  "name": "YouTube Music",
+  "binary": "youmz-module",
+  "default_playlist": "RDMM"
+}

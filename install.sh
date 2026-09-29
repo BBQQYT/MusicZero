@@ -9,14 +9,16 @@ if ! command -v cargo >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build --manifest-path "$root/Cargo.toml" --workspace --release \
-    --features ymz/tray,youmz/tray,mz/tray
+cargo build --manifest-path "$root/Cargo.toml" --workspace --release --locked
 
 mkdir -p "$prefix/bin"
-for binary in mz ymz ymz-tray youmz youmz-tray; do
-    install -m 755 "$root/target/release/$binary" "$prefix/bin/$binary"
+install -m 755 "$root/target/release/mz" "$prefix/bin/mz"
+for module in ymz youmz; do
+    mkdir -p "$prefix/bin/modules/$module"
+    install -m 644 "$root/modules/$module/module.json" "$prefix/bin/modules/$module/module.json"
+    install -m 755 "$root/target/release/$module-module" "$prefix/bin/modules/$module/$module-module"
 done
 
 echo "Установлено в $prefix/bin"
-echo "Запуск: mz ymz (Яндекс Музыка) или mz youmz (YouTube Music) — трей включён сразу!"
-echo "Управление: mz toggle, mz next, mz prev, mz status, mz playlist, mz wave."
+echo "Запуск: mz modules; mz start ymz (или mz start youmz)"
+echo "Управление: mz toggle, mz next, mz status, mz playlist, mz switch youmz."
