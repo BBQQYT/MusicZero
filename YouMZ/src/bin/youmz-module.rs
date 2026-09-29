@@ -2,6 +2,8 @@
 mod api;
 #[path = "../auth.rs"]
 mod auth;
+#[path = "../browser_login.rs"]
+mod browser_login;
 #[path = "../config.rs"]
 mod config;
 #[path = "../paths.rs"]
@@ -13,6 +15,7 @@ use std::error::Error;
 use std::io;
 use std::process::Stdio;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -28,9 +31,12 @@ fn print_json(value: serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-async fn stream_audio(video_id: &str, proxy: Option<&str>) -> Result<()> {
+async fn stream_audio(video_id: &str, session: &str, proxy: Option<&str>) -> Result<()> {
     let mut cmd = tokio::process::Command::new("yt-dlp");
-    cmd.arg("-f")
+    cmd.arg("--ignore-config")
+        .arg("--config-locations")
+        .arg("-")
+        .arg("-f")
         .arg("140/ba/bestaudio")
         .arg("--no-playlist")
         .arg("--no-warnings")
@@ -38,19 +44,23 @@ async fn stream_audio(video_id: &str, proxy: Option<&str>) -> Result<()> {
         .arg("-o")
         .arg("-")
         .arg(format!("https://www.youtube.com/watch?v={video_id}"));
-    if let Some(cookie_path) = auth::ensure_netscape_cookie_file() {
-        cmd.arg("--cookies").arg(cookie_path);
-    }
     if let Some(proxy) = proxy {
         cmd.arg("--proxy").arg(proxy);
     }
-    let status = cmd
-        .stdin(Stdio::null())
+    let mut child = cmd
+        .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
-        .status()
-        .await?;
+        .spawn()?;
+    let header = format!(
+        "--add-headers \"Cookie:{}\"\n",
+        session.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(header.as_bytes()).await?;
+    }
+    let status = child.wait().await?;
     if status.success() {
         Ok(())
     } else {
@@ -70,10 +80,9 @@ async fn main() -> Result<()> {
     }
     let cfg = Arc::new(config::load()?);
     if command == "login" {
-        match auth::interactive_login(&cfg.proxy, &auth::load_client_id(), &auth::load_client_secret()).await? {
-            auth::Auth::Cookie(_) => {},
-            auth::Auth::Bearer(_) => return Err("Не удалось создать cookie-сессию. Сохраните cookie браузера в конфиг YouMZ или задайте YOUMZ_COOKIE.".into()),
-        }
+        let session = browser_login::login(&cfg.proxy).await?;
+        auth::save_session(&session)?;
+        eprintln!("Вход в YouTube Music завершён. Сессия сохранена в конфиге YouMZ.");
         return Ok(());
     }
     if command == "settings" {
@@ -84,9 +93,9 @@ async fn main() -> Result<()> {
         .clone()
         .ok_or("YouTube Music: run `mz login youmz` first")?;
     if command == "audio" {
-        return stream_audio(arg(&args, 2, "track id")?, cfg.proxy.as_deref()).await;
+        return stream_audio(arg(&args, 2, "track id")?, &cookie, cfg.proxy.as_deref()).await;
     }
-    let yt = YtClient::new(cfg.clone(), auth::Auth::Cookie(cookie)).await;
+    let yt = YtClient::new(cfg.clone()).await;
     match command {
         "playlists" => {
             let mut playlists = vec![json!({"id": "RDMM", "name": "Мой джем"})];

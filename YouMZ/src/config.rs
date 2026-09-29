@@ -30,9 +30,7 @@ fn read_file_or_env(file_name: &str, env_var: &str) -> Option<String> {
 }
 
 pub fn load() -> Result<Config, String> {
-    // Cookie больше не обязателен: при первом запуске программа предложит
-    // войти по ссылке или импортирует сессию YouTube Music Desktop.
-    let cookie = read_file_or_env("cookie", "YOUMZ_COOKIE");
+    let cookie = crate::auth::load_session();
 
     let proxy = read_file_or_env("proxy", "YOUMZ_PROXY");
 

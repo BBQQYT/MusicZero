@@ -8,7 +8,39 @@ mod paths;
 use api::YandexClient;
 use serde_json::json;
 use std::error::Error;
-use std::io;
+use std::io::{self, Write};
+use std::process::Command;
+
+const TOKEN_URL: &str = "https://ym-token.marshal.dev/";
+
+fn open_token_page() -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", TOKEN_URL])
+            .spawn()?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let mut last_error = None;
+        for browser in [
+            "xdg-open",
+            "firefox",
+            "librewolf",
+            "chromium",
+            "google-chrome",
+            "chrome",
+        ] {
+            match Command::new(browser).arg(TOKEN_URL).spawn() {
+                Ok(_) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Браузер не найден")))
+    }
+}
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -33,8 +65,27 @@ async fn main() -> Result<()> {
             json!({"protocol": 1, "id": "ymz", "name": "Яндекс Музыка", "default_playlist": "wave"}),
         ),
         "login" => {
+            if let Err(error) = open_token_page() {
+                eprintln!("Не удалось открыть браузер: {error}");
+            }
+            eprintln!("Получите токен на {TOKEN_URL}");
+            eprint!("Вставьте токен Яндекс Музыки и нажмите Enter: ");
+            io::stderr().flush()?;
+            let mut token = String::new();
+            if io::stdin().read_line(&mut token)? == 0 {
+                return Err("Ввод токена отменён".into());
+            }
+            let token = token.trim();
+            if token.is_empty() || token.chars().any(char::is_control) {
+                return Err("Токен пуст или содержит управляющие символы".into());
+            }
+            YandexClient::new(token)
+                .list_playlists()
+                .await
+                .map_err(|error| format!("Токен не принят Яндекс Музыкой: {error}"))?;
+            config::save_token(token)?;
             eprintln!(
-                "Сохраните OAuth токен в {} или задайте YM_TOKEN.",
+                "Токен сохранён в {}",
                 paths::config_dir("ymz").join("token").display()
             );
             Ok(())

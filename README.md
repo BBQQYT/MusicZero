@@ -42,7 +42,9 @@ mz quit
 
 Keep the player in the first terminal and issue control commands in another. On Windows, run `./mz.exe` from the extracted directory in PowerShell. The Linux build has one tray icon when the desktop supports StatusNotifierItem. Windows control uses the CLI; a native tray and media keys are not available yet.
 
-YMZ reads its OAuth token from `%APPDATA%\ymz\token` on Windows or `~/.config/ymz/token` on Linux; `YM_TOKEN` also works. Run `mz login youmz` for YouTube Music and follow the console link. YouMZ also accepts `YOUMZ_COOKIE`.
+Run `mz login YMZ` to open `https://ym-token.marshal.dev/`, then paste the token into the terminal. It is checked and saved under `%APPDATA%\ymz\token` on Windows or `~/.config/ymz/token` on Linux. `YM_TOKEN` also works.
+
+Run `mz login YouMZ` to open Firefox, LibreWolf, Chromium, or Chrome in a separate temporary profile. Sign in to YouTube Music and wait for the success message. The module reads the live browser session through its debugging protocol without accessing browser cookie files, then saves the session for later runs. Set `YOUMZ_BROWSER` to a browser path if auto-detection fails. Audio playback still needs `yt-dlp` on `PATH`.
 
 ## Write a module
 

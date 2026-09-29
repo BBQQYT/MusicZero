@@ -9,7 +9,6 @@ use std::sync::Arc;
 use rustypipe::client::{RustyPipe, RustyPipeBuilder};
 use rustypipe::model::TrackItem;
 
-use crate::auth::Auth;
 use crate::config::Config;
 
 /// YouTube просит войти в аккаунт ("вы не бот") — это ограничение IP/клиента,
@@ -52,7 +51,7 @@ pub struct YtClient {
 impl YtClient {
     /// Создать клиент. Cookie включают авторизованный режим rustypipe —
     /// без него «Мой джем» недоступен.
-    pub async fn new(cfg: Arc<Config>, _auth: Auth) -> Self {
+    pub async fn new(cfg: Arc<Config>) -> Self {
         let make_builder = || {
             let mut b = reqwest::Client::builder();
             if let Some(proxy_url) = &cfg.proxy {
@@ -65,7 +64,7 @@ impl YtClient {
 
         let builder = RustyPipeBuilder::new()
             // Кэш rustypipe (visitorData, cookie) — в конфиге youmz
-            .storage_dir(crate::auth::config_dir());
+            .storage_dir(crate::paths::config_dir("youmz"));
 
         let rp = builder
             .build_with_client(client_builder)

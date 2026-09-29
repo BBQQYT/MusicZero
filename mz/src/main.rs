@@ -13,7 +13,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 fn module<'a>(modules: &'a [Module], id: &str) -> Result<&'a Module> {
     modules
         .iter()
-        .find(|m| m.manifest.id == id)
+        .find(|m| m.manifest.id.eq_ignore_ascii_case(id))
         .ok_or_else(|| format!("Модуль {id} не найден. Выполните `mz modules`.").into())
 }
 
@@ -63,7 +63,7 @@ fn help() {
 async fn start(modules: Vec<Module>, id: &str) -> Result<()> {
     let index = modules
         .iter()
-        .position(|m| m.manifest.id == id)
+        .position(|m| m.manifest.id.eq_ignore_ascii_case(id))
         .ok_or_else(|| format!("Модуль {id} не найден"))?;
     modules[index].validate().await?;
     if ipc::call(&json!({"action":"ping"})).await.is_ok() {
@@ -110,8 +110,9 @@ async fn main() -> Result<()> {
         }
         Some("switch") => {
             let id = args.get(1).ok_or("Укажите модуль")?;
-            command("switch", id, "").await?;
-            println!("Источник: {id}");
+            let selected = module(&modules, id)?;
+            command("switch", &selected.manifest.id, "").await?;
+            println!("Источник: {}", selected.manifest.name);
         }
         Some("login") => {
             module(
@@ -196,7 +197,13 @@ async fn main() -> Result<()> {
                     .into(),
             )
         }
-        Some(id) if modules.iter().any(|item| item.manifest.id == id) => start(modules, id).await?,
+        Some(id)
+            if modules
+                .iter()
+                .any(|item| item.manifest.id.eq_ignore_ascii_case(id)) =>
+        {
+            start(modules, id).await?
+        }
         Some(other) => return Err(format!("Неизвестная команда или модуль: {other}").into()),
     }
     Ok(())
