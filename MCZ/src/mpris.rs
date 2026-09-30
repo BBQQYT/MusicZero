@@ -140,8 +140,8 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn can_seek(&self) -> bool {
-        true
+    async fn can_seek(&self) -> bool {
+        *self.current_duration_us.read().await > 0
     }
 
     #[zbus(property)]

@@ -35,6 +35,14 @@ pub struct Track {
     pub art_url: String,
     #[serde(default)]
     pub duration_ms: i64,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default = "default_buffer_ms")]
+    pub buffer_ms: u32,
+}
+
+fn default_buffer_ms() -> u32 {
+    1000
 }
 
 #[derive(Clone, Debug, Deserialize)]

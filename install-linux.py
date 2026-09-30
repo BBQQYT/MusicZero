@@ -22,6 +22,12 @@ FILES = (
     ("musiczero/modules/ymz/ymz-module", "modules/ymz/ymz-module", 0o755),
     ("musiczero/modules/youmz/module.json", "modules/youmz/module.json", 0o644),
     ("musiczero/modules/youmz/youmz-module", "modules/youmz/youmz-module", 0o755),
+    ("musiczero/modules/local/module.json", "modules/local/module.json", 0o644),
+    ("musiczero/modules/local/README.md", "modules/local/README.md", 0o644),
+    ("musiczero/modules/local/local-module", "modules/local/local-module", 0o755),
+    ("musiczero/modules/icecast/module.json", "modules/icecast/module.json", 0o644),
+    ("musiczero/modules/icecast/README.md", "modules/icecast/README.md", 0o644),
+    ("musiczero/modules/icecast/icecast-module", "modules/icecast/icecast-module", 0o755),
     ("musiczero/mz", "mz", 0o755),
 )
 
@@ -58,12 +64,23 @@ def release_asset():
 def install(archive, destination):
     with tarfile.open(archive, "r:gz") as bundle:
         members = {}
+        # Older versioned releases contain only YMZ/YouMZ; keep them installable.
+        absent_modules = set()
+        for module in ("local", "icecast"):
+            try:
+                bundle.getmember(f"musiczero/modules/{module}/module.json")
+            except KeyError:
+                absent_modules.add(module)
         for source_name, _, _ in FILES:
+            if any(source_name.startswith(f"musiczero/modules/{module}/") for module in absent_modules):
+                continue
             member = bundle.getmember(source_name)
             if not member.isfile() or member.size > 100 * 1024 * 1024:
                 raise RuntimeError(f"Некорректный файл в архиве: {source_name}")
             members[source_name] = member
         for source_name, target_name, mode in FILES:
+            if source_name not in members:
+                continue
             source = bundle.extractfile(members[source_name])
             if source is None:
                 raise RuntimeError(f"Не удалось прочитать {source_name}")

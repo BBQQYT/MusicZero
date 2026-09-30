@@ -173,6 +173,9 @@ impl Player {
                 self.notify_status("Stopped").await;
             }
             PlayerCommand::Seek(offset) => {
+                if self.current.as_ref().is_some_and(|track| track.stream) {
+                    return;
+                }
                 let total = *self.duration_us.read().await;
                 let target = (self.sink.get_pos().as_micros() as i64)
                     .saturating_add(offset)
@@ -188,6 +191,9 @@ impl Player {
                 }
             }
             PlayerCommand::SetPosition(position) => {
+                if self.current.as_ref().is_some_and(|track| track.stream) {
+                    return;
+                }
                 let total = *self.duration_us.read().await;
                 let target = position.clamp(0, total.max(0));
                 if self
@@ -281,6 +287,19 @@ impl Player {
                 });
                 return false;
             }
+            "set-setting" if matches!(self.module().manifest.id.as_str(), "local" | "icecast") => {
+                let key = request.request["key"].as_str().unwrap_or("");
+                match self.module().json("set-setting", &[key, value]).await {
+                    Ok(reply) => {
+                        self.generation = self.generation.wrapping_add(1);
+                        self.queue.clear();
+                        self.clear_current();
+                        self.retry_at = Instant::now();
+                        reply
+                    }
+                    Err(error) => json!({"error":error.to_string()}),
+                }
+            }
             "settings" | "set-setting" => {
                 let module = self.module().clone();
                 let is_settings = action == "settings";
@@ -309,6 +328,15 @@ impl Player {
 
     async fn set_track(&mut self, track: Track, file: NamedTempFile) -> Result<()> {
         let source = decode_audio(&file)?;
+        self.begin_track(track, source, Some(file)).await
+    }
+
+    async fn begin_track<S: rodio::Source + Send + 'static>(
+        &mut self,
+        track: Track,
+        source: S,
+        file: Option<NamedTempFile>,
+    ) -> Result<()> {
         self.sink.stop();
         self.sink.append(source);
         self.sink.play();
@@ -340,14 +368,19 @@ impl Player {
             self.module().manifest.id
         );
         self.current = Some(track);
-        self.current_file = Some(file);
+        self.current_file = file;
         Ok(())
     }
 }
 
+enum Audio {
+    File(NamedTempFile),
+    Live(crate::live::LiveSource),
+}
+
 enum Loaded {
     Tracks(Result<Vec<Track>>),
-    Audio(Track, Result<NamedTempFile>),
+    Audio(Track, Result<Audio>),
 }
 
 type LoadFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Loaded> + Send>>;
@@ -355,7 +388,7 @@ type LoadFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Loaded> + S
 struct Preload {
     pending: Option<LoadFuture>,
     loading_track: Option<Track>,
-    ready: Option<(Track, NamedTempFile)>,
+    ready: Option<(Track, Audio)>,
 }
 
 impl Preload {
@@ -374,7 +407,13 @@ impl Preload {
         if let Some(track) = queue.pop_front() {
             self.loading_track = Some(track.clone());
             self.pending = Some(Box::pin(async move {
-                let result = module.audio(&track.id).await;
+                let result = if track.stream {
+                    crate::live::LiveSource::open(module, track.id.clone(), track.buffer_ms)
+                        .await
+                        .map(Audio::Live)
+                } else {
+                    module.audio(&track.id).await.map(Audio::File)
+                };
                 Loaded::Audio(track, result)
             }));
         } else {
@@ -419,7 +458,11 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
         }
         if player.active && player.current.is_none() {
             if let Some((track, file)) = preload.ready.take() {
-                if let Err(error) = player.set_track(track, file).await {
+                let result = match file {
+                    Audio::File(file) => player.set_track(track, file).await,
+                    Audio::Live(source) => player.begin_track(track, source, None).await,
+                };
+                if let Err(error) = result {
                     consecutive_failures = consecutive_failures.saturating_add(1);
                     log::warn!("Декодирование: {error}");
                     player.retry_at = Instant::now() + backoff(consecutive_failures);
@@ -431,6 +474,7 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
         // Keep only the current file plus one upcoming audio file on disk.
         // Refill metadata too when the current track is the last in the batch.
         if player.active
+            && player.current.as_ref().is_none_or(|track| !track.stream)
             && preload.pending.is_none()
             && preload.ready.is_none()
             && Instant::now() >= player.retry_at
@@ -530,6 +574,8 @@ mod tests {
             artist: String::new(),
             art_url: String::new(),
             duration_ms: 120,
+            stream: false,
+            buffer_ms: 1000,
         }
     }
 
@@ -575,7 +621,9 @@ mod tests {
         let Loaded::Audio(track, file) = loaded else {
             panic!("expected next audio")
         };
-        let file = file.unwrap();
+        let Audio::File(file) = file.unwrap() else {
+            panic!("expected file")
+        };
         assert_eq!(track.id, "second");
         assert!(decode_audio(&file).unwrap().count() > 0);
         assert!(
@@ -583,7 +631,7 @@ mod tests {
             "current audio must not be stopped by preloading"
         );
         let path = file.path().to_path_buf();
-        preload.ready = Some((track, file));
+        preload.ready = Some((track, Audio::File(file)));
         preload.clear();
         assert!(
             !path.exists(),

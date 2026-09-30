@@ -34,19 +34,23 @@ jobs:
       - name: Package Linux release
         if: runner.os == 'Linux' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         run: |
-          mkdir -p dist/musiczero/modules/ymz dist/musiczero/modules/youmz
-          cp target/release/mz README_RU.md LICENSE dist/musiczero/
+          mkdir -p dist/musiczero/modules/{ymz,youmz,local,icecast}
+          cp target/release/mz README.md README_RU.md LICENSE dist/musiczero/
           cp modules/ymz/module.json target/release/ymz-module dist/musiczero/modules/ymz/
           cp modules/youmz/module.json target/release/youmz-module dist/musiczero/modules/youmz/
+          cp modules/local/module.json modules/local/README.md target/release/local-module dist/musiczero/modules/local/
+          cp modules/icecast/module.json modules/icecast/README.md target/release/icecast-module dist/musiczero/modules/icecast/
           tar -czf musiczero-linux-x64.tar.gz -C dist musiczero
       - name: Package Windows release
         if: runner.os == 'Windows' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/musiczero/modules/ymz,dist/musiczero/modules/youmz | Out-Null
-          Copy-Item target/release/mz.exe,README_RU.md,LICENSE dist/musiczero/
+          New-Item -ItemType Directory -Force dist/musiczero/modules/ymz,dist/musiczero/modules/youmz,dist/musiczero/modules/local,dist/musiczero/modules/icecast | Out-Null
+          Copy-Item target/release/mz.exe,README.md,README_RU.md,LICENSE dist/musiczero/
           Copy-Item modules/ymz/module.json,target/release/ymz-module.exe dist/musiczero/modules/ymz/
           Copy-Item modules/youmz/module.json,target/release/youmz-module.exe dist/musiczero/modules/youmz/
+          Copy-Item modules/local/module.json,modules/local/README.md,target/release/local-module.exe dist/musiczero/modules/local/
+          Copy-Item modules/icecast/module.json,modules/icecast/README.md,target/release/icecast-module.exe dist/musiczero/modules/icecast/
           Compress-Archive -Path dist/musiczero -DestinationPath musiczero-windows-x64.zip
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))

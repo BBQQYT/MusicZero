@@ -1,4 +1,5 @@
 mod ipc;
+mod live;
 mod player;
 mod plugin;
 #[cfg(all(feature = "tray", target_os = "linux"))]
@@ -53,8 +54,8 @@ fn help() {
   mz next|stop|quit       Следующий трек, остановка, выход\n\
   mz playlists            Список плейлистов\n\
   mz playlist <id|номер>  Выбрать плейлист\n\
-  mz settings             Настройки активного сервиса\n\
-  mz set <ключ> <значение> Изменить настройку\n\n\
+  mz settings [модуль]    Настройки сервиса\n\
+  mz set [модуль] <ключ> <значение> Изменить настройку\n\n\
 Папки модулей лежат в `modules` рядом с mz.",
         env!("CARGO_PKG_VERSION")
     );
@@ -180,6 +181,24 @@ async fn main() -> Result<()> {
                     response["playlist"].as_str().unwrap_or("?")
                 );
             }
+        }
+        Some("settings") if args.len() == 2 => {
+            let selected = module(&modules, &args[1])?;
+            let response = selected.json("settings", &[]).await?;
+            println!("{}", serde_json::to_string_pretty(&response["settings"])?);
+        }
+        Some("set") if args.len() == 4 => {
+            let selected = module(&modules, &args[1])?;
+            let active = command("status", "", "")
+                .await
+                .ok()
+                .is_some_and(|status| status["module"] == selected.manifest.id);
+            let response = if active {
+                command("set-setting", &args[3], &args[2]).await?
+            } else {
+                selected.json("set-setting", &[&args[2], &args[3]]).await?
+            };
+            println!("{}", serde_json::to_string_pretty(&response["settings"])?);
         }
         Some("settings" | "wave") if args.len() < 3 => {
             let response = command("settings", "", "").await?;

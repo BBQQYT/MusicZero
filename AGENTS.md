@@ -1,12 +1,16 @@
 # AGENTS.md
 
 ## Structure
-- Cargo workspace (`resolver = "2"`): `MCZ`, `YMZ`, `YouMZ`, `mz`. Root `Cargo.toml` only defines workspace + `profile.release` (`opt-level="s"`, `lto=true`, `strip=true`).
+- Cargo workspace (`resolver = "2"`): `MCZ`, `YMZ`, `YouMZ`, `mz`, `Local`, `Icecast`, `ModuleSupport`. Root `Cargo.toml` only defines workspace + `profile.release` (`opt-level="s"`, `lto=true`, `strip=true`).
 - `MCZ` (`mcz` crate) — shared lib: `src/paths.rs` (XDG/APPDATA resolution), `src/mpris.rs`, `src/shutdown.rs`. No binary.
 - `mz` — host player binary `src/main.rs` + `player.rs` (queue/playback/MPRIS), `ipc.rs`, `plugin.rs` (module discovery/execution), `tray.rs` (Linux-only, `ksni` feature). `rodio` with `symphonia-all`, `zbus`, `tokio`.
 - `YMZ` (`ymz` crate, `autobins=false`) — binary `ymz-module` at `YMZ/src/bin/ymz-module.rs`. `YouMZ` (`youmz` crate, `autobins=false`) — binary `youmz-module` at `YouMZ/src/bin/youmz-module.rs`.
 - Repo module manifests: `modules/ymz/module.json`, `modules/youmz/module.json`. Installed layout is `musiczero/mz` (+ `.exe` on Windows) beside `musiczero/modules/<id>/`.
 - `examples/module-template` — standalone crate (own `Cargo.lock`/`target/`, `[workspace]` isolated). Copy its `module.json` + built binary to `modules/demo/` to test protocol.
+
+- `Local`/`Icecast` expose `local-module`/`icecast-module`; `ModuleSupport` shares atomic settings, paths and FFmpeg execution without depending on the audio host. Module setup and runtime dependencies are documented in `modules/local/README.md` and `modules/icecast/README.md`.
+- Live tracks set `stream=true` and write s16le 48 kHz stereo PCM; `mz/src/live.rs` owns a bounded reader and cancels its provider. Do not apply the finite-file EOF/download limit or next-stream preloading to live radio.
+- `mz settings <module>` / `mz set <module> <key> <value>` configure providers before startup; active Local/Icecast changes reset the playback generation to discard obsolete downloads.
 
 ## Build & Run
 - Canonical build: `cargo build --workspace --release --locked`
@@ -15,6 +19,7 @@
 - Single crate: `cargo build -p mcz --release` / `cargo build -p ymz --release` / `cargo build -p youmz --release`.
 - Example module: `cargo build --release --manifest-path examples/module-template/Cargo.toml`
 - Install from source: `./install.sh` (respects `MUSICZERO_PREFIX` default `~/.local`; installs `mz` + `modules/*/module.json`+binaries). `bootstrap.sh` clones `MUSICZERO_REPO`/`MUSICZERO_REF` to temp and runs `install.sh`.
+- Integration smoke tests (Linux, FFmpeg/ffprobe with libopenmpt, and OpenSSL): after `cargo build --workspace --locked`, run `python3 tests/smoke_modules.py` and `python3 tests/smoke_https.py`. These use synthetic audio and isolated configs, a fake authenticated station, ALSA null output and a temporary CA.
 - Tests: `cargo test --workspace --locked`; focused shared-library tests: `cargo test -p mcz --locked`; host tests: `cargo test -p mz --locked`. No clippy/rustfmt config in repo.
 - Preloading: `Preload` in `mz/src/player.rs` holds one upcoming audio file; dropping its pending future cancels the provider. Successful provider/playlist changes discard it; `next` during playback keeps it.
 - Audio decoding: use `decode_audio` in `mz/src/player.rs`; seekable M4A requires the file byte length in `Decoder::builder()`. The regression fixture is synthetic (`mz/tests/fixtures/tone.m4a`).
