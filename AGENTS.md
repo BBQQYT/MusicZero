@@ -16,6 +16,8 @@
 - Example module: `cargo build --release --manifest-path examples/module-template/Cargo.toml`
 - Install from source: `./install.sh` (respects `MUSICZERO_PREFIX` default `~/.local`; installs `mz` + `modules/*/module.json`+binaries). `bootstrap.sh` clones `MUSICZERO_REPO`/`MUSICZERO_REF` to temp and runs `install.sh`.
 - Tests: `cargo test --workspace --locked`; focused shared-library tests: `cargo test -p mcz --locked`; host tests: `cargo test -p mz --locked`. No clippy/rustfmt config in repo.
+- Preloading: `Preload` in `mz/src/player.rs` holds one upcoming audio file; dropping its pending future cancels the provider. Successful provider/playlist changes discard it; `next` during playback keeps it.
+- Audio decoding: use `decode_audio` in `mz/src/player.rs`; seekable M4A requires the file byte length in `Decoder::builder()`. The regression fixture is synthetic (`mz/tests/fixtures/tone.m4a`).
 - Env logging: `mz` uses `env_logger` default `warn,mz=info` (`RUST_LOG` overrides).
 
 ## Module Protocol (protocol = 1)

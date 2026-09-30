@@ -15,7 +15,6 @@ use std::error::Error;
 use std::io;
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -39,30 +38,46 @@ fn valid_video_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+fn cookie_file(session: &str) -> Result<tempfile::NamedTempFile> {
+    use std::io::Write;
+    if session.is_empty() || session.len() > 32 * 1024 || session.chars().any(char::is_control) {
+        return Err("Invalid YouTube session".into());
+    }
+    let mut file = tempfile::NamedTempFile::new()?;
+    writeln!(file, "# Netscape HTTP Cookie File")?;
+    for cookie in session.split(';') {
+        let (name, value) = cookie
+            .trim()
+            .split_once('=')
+            .ok_or("Invalid YouTube cookie")?;
+        if name.is_empty()
+            || name
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric() && !b"!#$%&'*+-.^_`|~".contains(&byte))
+        {
+            return Err("Invalid YouTube cookie name".into());
+        }
+        writeln!(file, ".youtube.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}")?;
+    }
+    file.flush()?;
+    Ok(file)
+}
+
 async fn stream_audio(video_id: &str, session: &str, proxy: Option<&str>) -> Result<()> {
     if !valid_video_id(video_id) {
         return Err(format!("Invalid video id: {video_id}").into());
-    }
-    if session.is_empty()
-        || session.len() > 32 * 1024
-        || session
-            .chars()
-            .any(|c| c.is_control() || c == '\n' || c == '\r')
-    {
-        return Err("Invalid YouTube session".into());
     }
     if let Some(proxy) = proxy {
         if proxy.len() > 1024 || proxy.chars().any(|c| c.is_control() || c.is_whitespace()) {
             return Err("Invalid proxy".into());
         }
     }
-    // yt-dlp reads config from stdin (`--config-locations -`). The Cookie header is
-    // injected as a single config directive; session is already filtered for control
-    // chars and newlines above so no directive injection is possible.
+    let cookies = cookie_file(session)?;
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.arg("--ignore-config")
-        .arg("--config-locations")
-        .arg("-")
+        .arg("--cookies")
+        .arg(cookies.path())
+        .arg("--quiet")
         .arg("-f")
         .arg("140/ba/bestaudio")
         .arg("--no-playlist")
@@ -75,18 +90,11 @@ async fn stream_audio(video_id: &str, session: &str, proxy: Option<&str>) -> Res
         cmd.arg("--proxy").arg(proxy);
     }
     let mut child = cmd
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()?;
-    // Escape backslash and double-quote for the quoted config value.
-    let escaped = session.replace('\\', "\\\\").replace('"', "\\\"");
-    let header = format!("--add-headers \"Cookie:{escaped}\"\n");
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(header.as_bytes()).await?;
-        // Close stdin so yt-dlp sees EOF on config; drop explicitly.
-    }
     let status = tokio::time::timeout(std::time::Duration::from_secs(300), child.wait())
         .await
         .map_err(|_| "yt-dlp timed out after 300s".to_string())??;
@@ -149,5 +157,39 @@ async fn main() -> Result<()> {
             print_json(json!({"tracks": tracks}))
         }
         _ => Err(format!("Unknown command: {command}").into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cookies_are_domain_scoped_and_values_keep_equals() {
+        let file = cookie_file("SID=test=value; SAPISID=other").unwrap();
+        let contents = std::fs::read_to_string(file.path()).unwrap();
+        assert!(contents.starts_with("# Netscape HTTP Cookie File\n"));
+        assert!(contents.contains(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\ttest=value\n"));
+        assert_eq!(contents.lines().count(), 3);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                file.as_file().metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_cookies_cannot_add_file_rows() {
+        for session in [
+            "SID=value\n.other.com",
+            "SID=val\tue",
+            "bad name=value",
+            "missing-equals",
+        ] {
+            assert!(cookie_file(session).is_err());
+        }
     }
 }

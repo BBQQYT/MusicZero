@@ -308,12 +308,7 @@ impl Player {
     }
 
     async fn set_track(&mut self, track: Track, file: NamedTempFile) -> Result<()> {
-        let meta = file.as_file().metadata()?;
-        if meta.len() == 0 || meta.len() > 512 * 1024 * 1024 {
-            return Err(format!("Некорректный размер аудио: {}", meta.len()).into());
-        }
-        let reader = BufReader::new(file.reopen()?);
-        let source = Decoder::new(reader)?;
+        let source = decode_audio(&file)?;
         self.sink.stop();
         self.sink.append(source);
         self.sink.play();
@@ -350,140 +345,278 @@ impl Player {
     }
 }
 
+enum Loaded {
+    Tracks(Result<Vec<Track>>),
+    Audio(Track, Result<NamedTempFile>),
+}
+
+type LoadFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Loaded> + Send>>;
+
+struct Preload {
+    pending: Option<LoadFuture>,
+    loading_track: Option<Track>,
+    ready: Option<(Track, NamedTempFile)>,
+}
+
+impl Preload {
+    fn new() -> Self {
+        Self {
+            pending: None,
+            loading_track: None,
+            ready: None,
+        }
+    }
+
+    fn start(&mut self, module: Module, playlist: String, queue: &mut VecDeque<Track>) {
+        if self.pending.is_some() || self.ready.is_some() {
+            return;
+        }
+        if let Some(track) = queue.pop_front() {
+            self.loading_track = Some(track.clone());
+            self.pending = Some(Box::pin(async move {
+                let result = module.audio(&track.id).await;
+                Loaded::Audio(track, result)
+            }));
+        } else {
+            self.pending = Some(Box::pin(async move {
+                Loaded::Tracks(module.tracks(&playlist).await)
+            }));
+        }
+    }
+
+    fn clear(&mut self) {
+        // Dropping the future also drops the module child (kill_on_drop) and temp file.
+        self.pending = None;
+        self.loading_track = None;
+        self.ready = None;
+    }
+
+    fn stop(&mut self, queue: &mut VecDeque<Track>) {
+        self.pending = None;
+        if let Some(track) = self.loading_track.take() {
+            queue.push_front(track);
+        }
+    }
+}
+
 pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
-    let (_stream, output) = rodio::OutputStream::try_default()?;
-    let sink = Arc::new(Sink::try_new(&output)?);
+    let stream = rodio::OutputStreamBuilder::open_default_stream()?;
+    let sink = Arc::new(Sink::connect_new(stream.mixer()));
     let (mut player, mut mpris_rx) = Player::new(modules, selected, sink).await;
     let (tx, mut rx) = mpsc::channel(32);
     let _server = crate::ipc::listen(tx).await?;
     log::info!("MusicZero: {}", player.module().manifest.name);
-    // Backoff for repeated module failures (exponential, capped).
+    let mut preload = Preload::new();
     let mut consecutive_failures: u32 = 0;
-    let backoff = |failures: u32| {
-        let secs = 2u64.saturating_pow(failures.min(6)) * 5; // 5,10,20,40,80,160,320 capped
-        Duration::from_secs(secs.min(300))
-    };
+    let backoff =
+        |failures: u32| Duration::from_secs((2u64.saturating_pow(failures.min(6)) * 5).min(300));
+    let shutdown = mcz::shutdown::wait();
+    tokio::pin!(shutdown);
     loop {
         if player.current.is_some() && player.sink.empty() {
             player.current = None;
             player.current_file = None;
         }
-        if player.active && player.current.is_none() && Instant::now() >= player.retry_at {
-            if player.queue.is_empty() {
-                let module = player.module().clone();
-                let playlist = player.playlist.clone();
-                let mut task = tokio::spawn(async move { module.tracks(&playlist).await });
-                loop {
-                    tokio::select! {
-                        result = &mut task => {
-                            match result {
-                                Ok(Ok(tracks)) if !tracks.is_empty() => {
-                                    player.queue.extend(tracks);
-                                    consecutive_failures = 0;
-                                }
-                                Ok(Ok(_)) => {
-                                    consecutive_failures = consecutive_failures.saturating_add(1);
-                                    log::warn!("Треки: пустой ответ (попытка {consecutive_failures})");
-                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
-                                }
-                                Ok(Err(error)) => {
-                                    consecutive_failures = consecutive_failures.saturating_add(1);
-                                    log::error!("Треки: {error} (попытка {consecutive_failures})");
-                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
-                                }
-                                Err(error) => {
-                                    consecutive_failures = consecutive_failures.saturating_add(1);
-                                    log::error!("Задача модуля: {error} (попытка {consecutive_failures})");
-                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
-                                }
-                            }
-                            break;
-                        }
-                        Some(request) = rx.recv() => {
-                            let generation = player.generation;
-                            if player.handle_control(request).await { task.abort(); player.sink.stop(); return Ok(()); }
-                            // Only break track fetch for actions that invalidate the queue or pause.
-                            if !player.active {
-                                task.abort(); break;
-                            }
-                            if player.generation != generation { consecutive_failures = 0; task.abort(); break; }
-                        }
-                        Some(command) = mpris_rx.recv() => {
-                            let reset = matches!(command, PlayerCommand::Next | PlayerCommand::Stop | PlayerCommand::Pause | PlayerCommand::PlayPause);
-                            player.handle_mpris(command).await;
-                            if reset { task.abort(); break; }
-                        }
-                        _ = mcz::shutdown::wait() => { task.abort(); player.sink.stop(); return Ok(()); },
-                    }
-                }
-                continue;
-            }
-            // Queue not empty — attempt to play next track.
-            let track = player.queue.pop_front().expect("queue checked");
-            // Validate track id to prevent module argument injection.
-            if track.id.is_empty()
-                || track.id.len() > 512
-                || track.id.chars().any(|c| c.is_control() || c == '\0')
-            {
-                log::warn!("Пропуск трека с некорректным id: {:?}", track.id);
-                continue;
-            }
-            let module = player.module().clone();
-            let id = track.id.clone();
-            let mut task = tokio::spawn(async move { module.audio(&id).await });
-            loop {
-                tokio::select! {
-                    result = &mut task => {
-                        match result {
-                            Ok(Ok(file)) => if let Err(error) = player.set_track(track, file).await {
-                                consecutive_failures = consecutive_failures.saturating_add(1);
-                                log::warn!("Декодирование: {error}");
-                                player.retry_at = Instant::now() + backoff(consecutive_failures);
-                            } else {
-                                consecutive_failures = 0;
-                            },
-                            Ok(Err(error)) => {
-                                consecutive_failures = consecutive_failures.saturating_add(1);
-                                log::warn!("Аудио: {error}");
-                                player.retry_at = Instant::now() + backoff(consecutive_failures);
-                            }
-                            Err(error) => {
-                                consecutive_failures = consecutive_failures.saturating_add(1);
-                                log::warn!("Задача аудио: {error}");
-                                player.retry_at = Instant::now() + backoff(consecutive_failures);
-                            }
-                        }
-                        break;
-                    }
-                    Some(request) = rx.recv() => {
-                        let generation = player.generation;
-                        if player.handle_control(request).await { task.abort(); player.sink.stop(); return Ok(()); }
-                        if !player.active {
-                            player.queue.push_front(track.clone()); task.abort(); break;
-                        }
-                        if player.generation != generation { consecutive_failures = 0; task.abort(); break; }
-                    }
-                    Some(command) = mpris_rx.recv() => {
-                        let reset = matches!(command, PlayerCommand::Next | PlayerCommand::Stop | PlayerCommand::Pause | PlayerCommand::PlayPause);
-                        let skip = matches!(command, PlayerCommand::Next);
-                        player.handle_mpris(command).await;
-                        if reset {
-                            if !skip && !player.active { player.queue.push_front(track.clone()); }
-                            task.abort(); break;
-                        }
-                    }
-                    _ = mcz::shutdown::wait() => { task.abort(); player.sink.stop(); return Ok(()); },
+        if player.active && player.current.is_none() {
+            if let Some((track, file)) = preload.ready.take() {
+                if let Err(error) = player.set_track(track, file).await {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    log::warn!("Декодирование: {error}");
+                    player.retry_at = Instant::now() + backoff(consecutive_failures);
+                } else {
+                    consecutive_failures = 0;
                 }
             }
-            continue;
+        }
+        // Keep only the current file plus one upcoming audio file on disk.
+        // Refill metadata too when the current track is the last in the batch.
+        if player.active
+            && preload.pending.is_none()
+            && preload.ready.is_none()
+            && Instant::now() >= player.retry_at
+        {
+            while player.queue.front().is_some_and(|track| {
+                track.id.is_empty()
+                    || track.id.len() > 512
+                    || track.id.chars().any(char::is_control)
+            }) {
+                log::warn!("Пропуск трека с некорректным id");
+                player.queue.pop_front();
+            }
+            preload.start(
+                player.module().clone(),
+                player.playlist.clone(),
+                &mut player.queue,
+            );
         }
         tokio::select! {
-            Some(request) = rx.recv() => if player.handle_control(request).await { break; },
-            Some(command) = mpris_rx.recv() => player.handle_mpris(command).await,
-            _ = mcz::shutdown::wait() => break,
-            _ = tokio::time::sleep(Duration::from_millis(200)) => {},
+            result = async { preload.pending.as_mut().expect("guarded pending load").as_mut().await }, if preload.pending.is_some() => {
+                preload.pending = None;
+                preload.loading_track = None;
+                match result {
+                    Loaded::Tracks(Ok(tracks)) if !tracks.is_empty() => {
+                        player.queue.extend(tracks);
+                    }
+                    Loaded::Audio(track, Ok(file)) => {
+                        preload.ready = Some((track, file));
+                        // Start immediately if playback ended while downloading.
+                    }
+                    result => {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        match result {
+                            Loaded::Tracks(Ok(_)) => log::warn!("Треки: пустой ответ"),
+                            Loaded::Tracks(Err(error)) => log::error!("Треки: {error}"),
+                            Loaded::Audio(_, Err(error)) => log::warn!("Аудио: {error}"),
+                            _ => unreachable!(),
+                        }
+                        player.retry_at = Instant::now() + backoff(consecutive_failures);
+                    }
+                }
+            }
+            Some(request) = rx.recv() => {
+                let action = request.request["action"].as_str().unwrap_or("").to_owned();
+                let generation = player.generation;
+                let had_current = player.current.is_some();
+                if player.handle_control(request).await { break; }
+                if player.generation != generation {
+                    // Next during playback consumes the already loading/ready track.
+                    // Next during loading skips it; successful switch/playlist discard it.
+                    if action != "next" || !had_current { preload.clear(); }
+                    consecutive_failures = 0;
+                }
+                if action == "stop" { preload.stop(&mut player.queue); }
+            }
+            Some(command) = mpris_rx.recv() => {
+                let generation = player.generation;
+                let had_current = player.current.is_some();
+                let stop = matches!(command, PlayerCommand::Stop);
+                player.handle_mpris(command).await;
+                if player.generation != generation {
+                    if !had_current { preload.clear(); }
+                    consecutive_failures = 0;
+                }
+                if stop { preload.stop(&mut player.queue); }
+            }
+            _ = &mut shutdown => break,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {},
         }
     }
+    preload.clear();
     player.sink.stop();
     Ok(())
+}
+
+fn decode_audio(file: &NamedTempFile) -> Result<Decoder<BufReader<std::fs::File>>> {
+    let len = file.as_file().metadata()?.len();
+    if len == 0 || len > 512 * 1024 * 1024 {
+        return Err(format!("Некорректный размер аудио: {len}").into());
+    }
+    Ok(Decoder::builder()
+        .with_data(BufReader::new(file.reopen()?))
+        .with_byte_len(len)
+        .with_seekable(true)
+        .build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn track(id: &str) -> Track {
+        Track {
+            id: id.into(),
+            title: id.into(),
+            artist: String::new(),
+            art_url: String::new(),
+            duration_ms: 120,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn next_audio_loads_while_current_audio_is_queued() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let audio = include_bytes!("../tests/fixtures/tone.m4a");
+        std::fs::write(dir.path().join("tone.m4a"), audio).unwrap();
+        let executable = dir.path().join("provider");
+        std::fs::write(
+            &executable,
+            b"#!/bin/sh\ncat \"$(dirname \"$0\")/tone.m4a\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let module = Module {
+            executable,
+            manifest: plugin::Manifest {
+                protocol: 1,
+                id: "demo".into(),
+                name: "Demo".into(),
+                binary: "provider".into(),
+                default_playlist: "main".into(),
+            },
+        };
+        // Keep the mixer unconsumed so the first track remains queued without an audio device.
+        let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+        let sink = Sink::connect_new(&mixer);
+        let mut first = NamedTempFile::new().unwrap();
+        first.write_all(audio).unwrap();
+        sink.append(decode_audio(&first).unwrap());
+        let mut queue = VecDeque::from([track("second"), track("third")]);
+        let mut preload = Preload::new();
+        preload.start(module.clone(), "main".into(), &mut queue);
+        // Starting again must not remove another queued track or start another process.
+        preload.start(module, "main".into(), &mut queue);
+        assert_eq!(queue.front().unwrap().id, "third");
+        let loaded = tokio::time::timeout(Duration::from_secs(5), preload.pending.take().unwrap())
+            .await
+            .unwrap();
+        let Loaded::Audio(track, file) = loaded else {
+            panic!("expected next audio")
+        };
+        let file = file.unwrap();
+        assert_eq!(track.id, "second");
+        assert!(decode_audio(&file).unwrap().count() > 0);
+        assert!(
+            !sink.empty(),
+            "current audio must not be stopped by preloading"
+        );
+        let path = file.path().to_path_buf();
+        preload.ready = Some((track, file));
+        preload.clear();
+        assert!(
+            !path.exists(),
+            "changing source must delete stale preloaded audio"
+        );
+    }
+
+    #[test]
+    fn stop_restores_the_track_being_downloaded() {
+        let mut preload = Preload::new();
+        preload.loading_track = Some(track("second"));
+        preload.pending = Some(Box::pin(std::future::pending()));
+        let mut queue = VecDeque::from([track("third")]);
+        preload.stop(&mut queue);
+        assert!(preload.pending.is_none());
+        assert_eq!(queue.pop_front().unwrap().id, "second");
+        assert_eq!(queue.pop_front().unwrap().id, "third");
+    }
+
+    #[test]
+    fn invalid_audio_returns_an_error() {
+        let mut file = NamedTempFile::new().unwrap();
+        assert!(decode_audio(&file).is_err());
+        file.write_all(b"not an audio file").unwrap();
+        assert!(decode_audio(&file).is_err());
+    }
+
+    #[test]
+    fn m4a_file_decodes_to_audio_samples() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(include_bytes!("../tests/fixtures/tone.m4a"))
+            .unwrap();
+        let decoder = decode_audio(&file).unwrap();
+        assert!(decoder.count() > 0);
+    }
 }
