@@ -178,19 +178,21 @@ pub fn spawn(modules: Vec<Module>) {
                     }
                 }
                 let playlists = playlists.clone();
-                let _ = handle.update(move |tray| {
-                    tray.selected = tray
-                        .modules
-                        .iter()
-                        .position(|(id, _)| *id == module)
-                        .unwrap_or(0);
-                    tray.current_playlist = playlists
-                        .iter()
-                        .position(|(id, _)| *id == playlist)
-                        .unwrap_or(0);
-                    tray.playlists = playlists;
-                    tray.playing = playing;
-                });
+                let _ = handle
+                    .update(move |tray| {
+                        tray.selected = tray
+                            .modules
+                            .iter()
+                            .position(|(id, _)| *id == module)
+                            .unwrap_or(0);
+                        tray.current_playlist = playlists
+                            .iter()
+                            .position(|(id, _)| *id == playlist)
+                            .unwrap_or(0);
+                        tray.playlists = playlists;
+                        tray.playing = playing;
+                    })
+                    .await;
             }
             tokio::time::sleep(Duration::from_secs(15)).await;
         }

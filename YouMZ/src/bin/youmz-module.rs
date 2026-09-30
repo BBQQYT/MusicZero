@@ -31,7 +31,34 @@ fn print_json(value: serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+fn valid_video_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 async fn stream_audio(video_id: &str, session: &str, proxy: Option<&str>) -> Result<()> {
+    if !valid_video_id(video_id) {
+        return Err(format!("Invalid video id: {video_id}").into());
+    }
+    if session.is_empty()
+        || session.len() > 32 * 1024
+        || session
+            .chars()
+            .any(|c| c.is_control() || c == '\n' || c == '\r')
+    {
+        return Err("Invalid YouTube session".into());
+    }
+    if let Some(proxy) = proxy {
+        if proxy.len() > 1024 || proxy.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return Err("Invalid proxy".into());
+        }
+    }
+    // yt-dlp reads config from stdin (`--config-locations -`). The Cookie header is
+    // injected as a single config directive; session is already filtered for control
+    // chars and newlines above so no directive injection is possible.
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.arg("--ignore-config")
         .arg("--config-locations")
@@ -53,14 +80,16 @@ async fn stream_audio(video_id: &str, session: &str, proxy: Option<&str>) -> Res
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()?;
-    let header = format!(
-        "--add-headers \"Cookie:{}\"\n",
-        session.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    // Escape backslash and double-quote for the quoted config value.
+    let escaped = session.replace('\\', "\\\\").replace('"', "\\\"");
+    let header = format!("--add-headers \"Cookie:{escaped}\"\n");
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(header.as_bytes()).await?;
+        // Close stdin so yt-dlp sees EOF on config; drop explicitly.
     }
-    let status = child.wait().await?;
+    let status = tokio::time::timeout(std::time::Duration::from_secs(300), child.wait())
+        .await
+        .map_err(|_| "yt-dlp timed out after 300s".to_string())??;
     if status.success() {
         Ok(())
     } else {
@@ -95,7 +124,7 @@ async fn main() -> Result<()> {
     if command == "audio" {
         return stream_audio(arg(&args, 2, "track id")?, &cookie, cfg.proxy.as_deref()).await;
     }
-    let yt = YtClient::new(cfg.clone()).await;
+    let yt = YtClient::new(cfg.clone()).await?;
     match command {
         "playlists" => {
             let mut playlists = vec![json!({"id": "RDMM", "name": "Мой джем"})];

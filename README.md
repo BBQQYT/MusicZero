@@ -44,7 +44,7 @@ Keep the player in the first terminal and issue control commands in another. On 
 
 Run `mz login YMZ` to open `https://ym-token.marshal.dev/`, then paste the token into the terminal. It is checked and saved under `%APPDATA%\ymz\token` on Windows or `~/.config/ymz/token` on Linux. `YM_TOKEN` also works.
 
-Run `mz login YouMZ` to open Firefox, LibreWolf, Chromium, or Chrome in a separate temporary profile. Sign in to YouTube Music and wait for the success message. The module reads the live browser session through its debugging protocol without accessing browser cookie files, then saves the session for later runs. Set `YOUMZ_BROWSER` to a browser path if auto-detection fails. Audio playback still needs `yt-dlp` on `PATH`.
+Run `mz login YouMZ` to open Firefox, LibreWolf, Chromium, or Chrome in a separate temporary profile. Sign in to YouTube Music, then close that browser window once your library appears. The module reopens its temporary profile to read and validate the saved session; wait for the success message. The module reads the live browser session through its debugging protocol without accessing browser cookie files, then saves the session for later runs. Set `YOUMZ_BROWSER` to a browser path if auto-detection fails. Audio playback still needs `yt-dlp` on `PATH`.
 
 ## Write a module
 

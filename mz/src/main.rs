@@ -67,7 +67,7 @@ async fn start(modules: Vec<Module>, id: &str) -> Result<()> {
         .ok_or_else(|| format!("Модуль {id} не найден"))?;
     modules[index].validate().await?;
     if ipc::call(&json!({"action":"ping"})).await.is_ok() {
-        command("switch", id, "").await?;
+        command("switch", &modules[index].manifest.id, "").await?;
         println!("Источник: {}", modules[index].manifest.name);
         return Ok(());
     }
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
                     let response = command("playlists", "", "").await?;
                     id = response["playlists"]
                         .as_array()
-                        .and_then(|list| list.get(number.saturating_sub(1)))
+                        .and_then(|list| number.checked_sub(1).and_then(|index| list.get(index)))
                         .and_then(|item| item["id"].as_str())
                         .ok_or("Номер плейлиста вне диапазона")?
                         .into();

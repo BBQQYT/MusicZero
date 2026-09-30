@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
             if token.is_empty() || token.chars().any(char::is_control) {
                 return Err("Токен пуст или содержит управляющие символы".into());
             }
-            YandexClient::new(token)
+            YandexClient::new(token)?
                 .list_playlists()
                 .await
                 .map_err(|error| format!("Токен не принят Яндекс Музыкой: {error}"))?;
@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
         }
         command => {
             let token = config::load_token()?;
-            let client = YandexClient::new(&token);
+            let client = YandexClient::new(&token)?;
             match command {
                 "playlists" => {
                     let playlists = client

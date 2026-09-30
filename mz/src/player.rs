@@ -24,6 +24,7 @@ pub struct Player {
     current_file: Option<NamedTempFile>,
     sink: Arc<Sink>,
     active: bool,
+    generation: u64,
     retry_at: Instant,
     mpris: Option<zbus::Connection>,
     title: Arc<RwLock<String>>,
@@ -58,20 +59,18 @@ impl Player {
                 track_path_prefix: "/org/mz/Track",
             };
             match async {
-                Ok::<_, zbus::Error>(
-                    Builder::session()?
-                        .name("org.mpris.MediaPlayer2.mz")?
-                        .serve_at(
-                            "/org/mpris/MediaPlayer2",
-                            MprisRoot {
-                                identity: "MusicZero",
-                                mime_types: &["audio/mpeg", "audio/mp4"],
-                            },
-                        )?
-                        .serve_at("/org/mpris/MediaPlayer2", player)?
-                        .build()
-                        .await?,
-                )
+                Builder::session()?
+                    .name("org.mpris.MediaPlayer2.mz")?
+                    .serve_at(
+                        "/org/mpris/MediaPlayer2",
+                        MprisRoot {
+                            identity: "MusicZero",
+                            mime_types: &["audio/mpeg", "audio/mp4"],
+                        },
+                    )?
+                    .serve_at("/org/mpris/MediaPlayer2", player)?
+                    .build()
+                    .await
             }
             .await
             {
@@ -95,6 +94,7 @@ impl Player {
                 current_file: None,
                 sink,
                 active: true,
+                generation: 0,
                 retry_at: Instant::now(),
                 mpris,
                 title,
@@ -162,6 +162,8 @@ impl Player {
                 }
             }
             PlayerCommand::Next => {
+                self.generation = self.generation.wrapping_add(1);
+                self.retry_at = Instant::now();
                 self.active = true;
                 self.clear_current();
             }
@@ -172,7 +174,9 @@ impl Player {
             }
             PlayerCommand::Seek(offset) => {
                 let total = *self.duration_us.read().await;
-                let target = (self.sink.get_pos().as_micros() as i64 + offset).clamp(0, total);
+                let target = (self.sink.get_pos().as_micros() as i64)
+                    .saturating_add(offset)
+                    .clamp(0, total.max(0));
                 if self
                     .sink
                     .try_seek(Duration::from_micros(target as u64))
@@ -185,7 +189,7 @@ impl Player {
             }
             PlayerCommand::SetPosition(position) => {
                 let total = *self.duration_us.read().await;
-                let target = position.clamp(0, total);
+                let target = position.clamp(0, total.max(0));
                 if self
                     .sink
                     .try_seek(Duration::from_micros(target as u64))
@@ -233,6 +237,7 @@ impl Player {
                     if let Some(index) = modules.iter().position(|m| m.manifest.id == value) {
                         match modules[index].validate().await {
                             Ok(()) => {
+                                self.generation = self.generation.wrapping_add(1);
                                 self.modules = modules;
                                 self.selected = index;
                                 self.playlist = plugin::selected_playlist(self.module());
@@ -252,7 +257,9 @@ impl Player {
             },
             "playlist" => match plugin::save_playlist(&self.module().manifest.id, value) {
                 Ok(()) => {
-                    self.playlist = value.into();
+                    self.generation = self.generation.wrapping_add(1);
+                    self.retry_at = Instant::now();
+                    self.playlist = value.trim().into();
                     self.queue.clear();
                     self.clear_current();
                     self.active = true;
@@ -301,6 +308,10 @@ impl Player {
     }
 
     async fn set_track(&mut self, track: Track, file: NamedTempFile) -> Result<()> {
+        let meta = file.as_file().metadata()?;
+        if meta.len() == 0 || meta.len() > 512 * 1024 * 1024 {
+            return Err(format!("Некорректный размер аудио: {}", meta.len()).into());
+        }
         let reader = BufReader::new(file.reopen()?);
         let source = Decoder::new(reader)?;
         self.sink.stop();
@@ -310,14 +321,15 @@ impl Player {
         *self.artist.write().await = track.artist.clone();
         *self.art_url.write().await = track.art_url.clone();
         *self.track_id.write().await = format!("{}_{}", self.module().manifest.id, track.id);
-        *self.duration_us.write().await = track.duration_ms * 1000;
+        let clamped_ms = track.duration_ms.clamp(0, i64::MAX / 1000);
+        *self.duration_us.write().await = clamped_ms * 1000;
         if let Some(connection) = &self.mpris {
             let meta = build_metadata_map(
                 &track.title,
                 &track.artist,
                 &track.art_url,
                 &self.track_id.read().await,
-                track.duration_ms * 1000,
+                clamped_ms * 1000,
                 "",
                 "/org/mz/Track",
             );
@@ -345,6 +357,12 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(32);
     let _server = crate::ipc::listen(tx).await?;
     log::info!("MusicZero: {}", player.module().manifest.name);
+    // Backoff for repeated module failures (exponential, capped).
+    let mut consecutive_failures: u32 = 0;
+    let backoff = |failures: u32| {
+        let secs = 2u64.saturating_pow(failures.min(6)) * 5; // 5,10,20,40,80,160,320 capped
+        Duration::from_secs(secs.min(300))
+    };
     loop {
         if player.current.is_some() && player.sink.empty() {
             player.current = None;
@@ -359,20 +377,36 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                     tokio::select! {
                         result = &mut task => {
                             match result {
-                                Ok(Ok(tracks)) if !tracks.is_empty() => player.queue.extend(tracks),
-                                Ok(Ok(_)) => player.retry_at = Instant::now() + Duration::from_secs(10),
-                                Ok(Err(error)) => { log::error!("Треки: {error}"); player.retry_at = Instant::now() + Duration::from_secs(10); }
-                                Err(error) => { log::error!("Задача модуля: {error}"); player.retry_at = Instant::now() + Duration::from_secs(10); }
+                                Ok(Ok(tracks)) if !tracks.is_empty() => {
+                                    player.queue.extend(tracks);
+                                    consecutive_failures = 0;
+                                }
+                                Ok(Ok(_)) => {
+                                    consecutive_failures = consecutive_failures.saturating_add(1);
+                                    log::warn!("Треки: пустой ответ (попытка {consecutive_failures})");
+                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
+                                }
+                                Ok(Err(error)) => {
+                                    consecutive_failures = consecutive_failures.saturating_add(1);
+                                    log::error!("Треки: {error} (попытка {consecutive_failures})");
+                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
+                                }
+                                Err(error) => {
+                                    consecutive_failures = consecutive_failures.saturating_add(1);
+                                    log::error!("Задача модуля: {error} (попытка {consecutive_failures})");
+                                    player.retry_at = Instant::now() + backoff(consecutive_failures);
+                                }
                             }
                             break;
                         }
                         Some(request) = rx.recv() => {
-                            let action = request.request["action"].as_str().unwrap_or("").to_owned();
+                            let generation = player.generation;
                             if player.handle_control(request).await { task.abort(); player.sink.stop(); return Ok(()); }
-                            if matches!(action.as_str(), "switch" | "playlist" | "pause" | "stop" | "next" | "toggle") && !player.active {
+                            // Only break track fetch for actions that invalidate the queue or pause.
+                            if !player.active {
                                 task.abort(); break;
                             }
-                            if matches!(action.as_str(), "switch" | "playlist" | "next") { task.abort(); break; }
+                            if player.generation != generation { consecutive_failures = 0; task.abort(); break; }
                         }
                         Some(command) = mpris_rx.recv() => {
                             let reset = matches!(command, PlayerCommand::Next | PlayerCommand::Stop | PlayerCommand::Pause | PlayerCommand::PlayPause);
@@ -384,7 +418,16 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 }
                 continue;
             }
+            // Queue not empty — attempt to play next track.
             let track = player.queue.pop_front().expect("queue checked");
+            // Validate track id to prevent module argument injection.
+            if track.id.is_empty()
+                || track.id.len() > 512
+                || track.id.chars().any(|c| c.is_control() || c == '\0')
+            {
+                log::warn!("Пропуск трека с некорректным id: {:?}", track.id);
+                continue;
+            }
             let module = player.module().clone();
             let id = track.id.clone();
             let mut task = tokio::spawn(async move { module.audio(&id).await });
@@ -393,27 +436,32 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                     result = &mut task => {
                         match result {
                             Ok(Ok(file)) => if let Err(error) = player.set_track(track, file).await {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
                                 log::warn!("Декодирование: {error}");
-                                player.retry_at = Instant::now() + Duration::from_secs(10);
+                                player.retry_at = Instant::now() + backoff(consecutive_failures);
+                            } else {
+                                consecutive_failures = 0;
                             },
                             Ok(Err(error)) => {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
                                 log::warn!("Аудио: {error}");
-                                player.retry_at = Instant::now() + Duration::from_secs(10);
+                                player.retry_at = Instant::now() + backoff(consecutive_failures);
                             }
                             Err(error) => {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
                                 log::warn!("Задача аудио: {error}");
-                                player.retry_at = Instant::now() + Duration::from_secs(10);
+                                player.retry_at = Instant::now() + backoff(consecutive_failures);
                             }
                         }
                         break;
                     }
                     Some(request) = rx.recv() => {
-                        let action = request.request["action"].as_str().unwrap_or("").to_owned();
+                        let generation = player.generation;
                         if player.handle_control(request).await { task.abort(); player.sink.stop(); return Ok(()); }
-                        if matches!(action.as_str(), "pause" | "stop" | "toggle") && !player.active {
+                        if !player.active {
                             player.queue.push_front(track.clone()); task.abort(); break;
                         }
-                        if matches!(action.as_str(), "switch" | "playlist" | "next") { task.abort(); break; }
+                        if player.generation != generation { consecutive_failures = 0; task.abort(); break; }
                     }
                     Some(command) = mpris_rx.recv() => {
                         let reset = matches!(command, PlayerCommand::Next | PlayerCommand::Stop | PlayerCommand::Pause | PlayerCommand::PlayPause);

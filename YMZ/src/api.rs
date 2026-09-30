@@ -14,7 +14,8 @@ struct StationTracksResponse {
 #[derive(Deserialize, Debug, Clone)]
 pub struct StationResult {
     pub sequence: Vec<TrackEntry>,
-    #[serde(rename = "batchId")]
+    #[serde(rename = "batchId", default)]
+    #[allow(dead_code)]
     pub batch_id: String,
 }
 
@@ -101,14 +102,15 @@ struct DownloadInfo {
 #[derive(Clone)]
 pub struct YandexClient {
     client: reqwest::Client,
+    download_client: reqwest::Client,
 }
 
 impl YandexClient {
-    pub fn new(token: &str) -> Self {
+    pub fn new(token: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("OAuth {}", token)).expect("Некорректный токен"),
+            HeaderValue::from_str(&format!("OAuth {}", token))?,
         );
         headers.insert(
             "X-Yandex-Music-Client",
@@ -118,10 +120,16 @@ impl YandexClient {
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap();
+            .build()?;
+        let download_client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(150))
+            .build()?;
 
-        Self { client }
+        Ok(Self {
+            client,
+            download_client,
+        })
     }
 
     async fn uid(&self) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
@@ -274,6 +282,7 @@ impl YandexClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn send_feedback(&self, batch_id: &str, track_id: &str, event_type: &str) {
         let url = format!("{}/rotor/station/user:onyourwave/feedback", BASE_URL);
         let payload = [
@@ -295,10 +304,21 @@ impl YandexClient {
         });
     }
 
+    fn valid_track_id(id: &str) -> bool {
+        !id.is_empty()
+            && id.len() <= 64
+            && id.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b':' || b == b'.'
+            })
+    }
+
     pub async fn get_stream_url(
         &self,
         track_id: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        if !Self::valid_track_id(track_id) {
+            return Err(format!("Invalid track id: {track_id}").into());
+        }
         let info_url = format!("{}/tracks/{}/download-info", BASE_URL, track_id);
         let mut delay = Duration::from_millis(500);
         let mut last = "unknown stream error".to_string();
@@ -334,7 +354,11 @@ impl YandexClient {
             .find(|d| d.codec == "mp3")
             .ok_or("MP3 поток не найден")?;
 
-        let resp = self.client.get(&target.download_info_url).send().await?;
+        let resp = self
+            .download_client
+            .get(&target.download_info_url)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(format!("download-info XML HTTP {}", resp.status()).into());
         }
@@ -352,6 +376,37 @@ impl YandexClient {
         let path = field("path")?;
         let ts = field("ts")?;
         let sign = field("s")?;
+        // Validate XML fields to prevent header/signature injection.
+        let valid_host = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 253
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        };
+        let valid_path = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 2048
+                && !s.contains(' ')
+                && !s.contains('\n')
+                && !s.contains('\r')
+                && !s.contains('\0')
+                && s.starts_with('/')
+        };
+        let valid_token = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 512
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.')
+        };
+        if !valid_host(host) {
+            return Err(format!("Некорректный host в XML: {host}").into());
+        }
+        if !valid_path(path) {
+            return Err(format!("Некорректный path в XML: {path}").into());
+        }
+        if !valid_token(ts) || !valid_token(sign) {
+            return Err("Некорректные поля ts/s в XML".into());
+        }
         let path_without_slash = path.strip_prefix('/').unwrap_or(path);
 
         let salt = "XGRlBW9FXlekgbPrr";
@@ -366,16 +421,27 @@ impl YandexClient {
         &self,
         stream_url: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !stream_url.starts_with("https://") || stream_url.len() > 4096 {
+            return Err("Invalid stream URL".into());
+        }
         use tokio::io::AsyncWriteExt;
         let mut delay = Duration::from_millis(500);
         for attempt in 1..=4 {
-            match self.client.get(stream_url).send().await {
+            match self.download_client.get(stream_url).send().await {
                 Ok(mut resp) if resp.status().is_success() => {
+                    if let Some(len) = resp.content_length() {
+                        if len == 0 || len > 512 * 1024 * 1024 {
+                            return Err(format!("Некорректный Content-Length: {len}").into());
+                        }
+                    }
                     let mut stdout = tokio::io::stdout();
-                    let mut written = 0usize;
+                    let mut written: u64 = 0;
                     while let Some(chunk) = resp.chunk().await? {
+                        written = written.saturating_add(chunk.len() as u64);
+                        if written > 512 * 1024 * 1024 {
+                            return Err("Аудиопоток превышает лимит 512 MiB".into());
+                        }
                         stdout.write_all(&chunk).await?;
-                        written += chunk.len();
                     }
                     stdout.flush().await?;
                     if written == 0 {
@@ -392,5 +458,14 @@ impl YandexClient {
             }
         }
         Err("Не удалось получить аудиопоток после 4 попыток".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn malformed_token_returns_error() {
+        assert!(YandexClient::new("bad\r\ntoken").is_err());
     }
 }

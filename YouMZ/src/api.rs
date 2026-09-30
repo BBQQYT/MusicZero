@@ -14,6 +14,7 @@ use crate::config::Config;
 /// YouTube просит войти в аккаунт ("вы не бот") — это ограничение IP/клиента,
 /// а не свойство трека. Такой ответ надо отличать от обычной недоступности,
 /// чтобы делать паузу вместо штурма запросами.
+#[allow(dead_code)]
 pub fn is_bot_check(reason: &str) -> bool {
     let r = reason.to_lowercase();
     r.contains("bot")
@@ -51,24 +52,19 @@ pub struct YtClient {
 impl YtClient {
     /// Создать клиент. Cookie включают авторизованный режим rustypipe —
     /// без него «Мой джем» недоступен.
-    pub async fn new(cfg: Arc<Config>) -> Self {
-        let make_builder = || {
-            let mut b = reqwest::Client::builder();
-            if let Some(proxy_url) = &cfg.proxy {
-                b = b.proxy(reqwest::Proxy::all(proxy_url).expect("Некорректный адрес прокси"));
-            }
-            b
-        };
-
-        let client_builder = make_builder();
+    pub async fn new(cfg: Arc<Config>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut client_builder = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60));
+        if let Some(proxy_url) = &cfg.proxy {
+            client_builder = client_builder.proxy(reqwest::Proxy::all(proxy_url)?);
+        }
 
         let builder = RustyPipeBuilder::new()
             // Кэш rustypipe (visitorData, cookie) — в конфиге youmz
             .storage_dir(crate::paths::config_dir("youmz"));
 
-        let rp = builder
-            .build_with_client(client_builder)
-            .expect("Не удалось создать клиент rustypipe");
+        let rp = builder.build_with_client(client_builder)?;
 
         // Авторизация cookie: rustypipe сам достанет SAPISIDHASH и применит
         if let Some(cookie) = &cfg.cookie {
@@ -79,7 +75,7 @@ impl YtClient {
             }
         }
 
-        Self { rp: Arc::new(rp) }
+        Ok(Self { rp: Arc::new(rp) })
     }
 
     /// Получить партию треков микса (радио). RDMM = «Мой джем».
@@ -190,11 +186,13 @@ fn track_item_to_track(item: &TrackItem) -> Track {
 }
 
 /// История «уже сыгранного», чтобы радио не ходило по кругу
+#[allow(dead_code)]
 pub struct History {
     seen: std::collections::VecDeque<String>,
     capacity: usize,
 }
 
+#[allow(dead_code)]
 impl History {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -233,5 +231,18 @@ impl History {
             }
         }
         fresh
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn malformed_proxy_returns_error() {
+        let cfg = Arc::new(Config {
+            cookie: None,
+            proxy: Some("://".into()),
+        });
+        assert!(YtClient::new(cfg).await.is_err());
     }
 }

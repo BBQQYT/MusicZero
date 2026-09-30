@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::error::Error;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::NamedTempFile;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -71,11 +72,12 @@ pub fn module_dir() -> Result<PathBuf> {
 
 pub fn discover() -> Result<Vec<Module>> {
     let root = module_dir()?;
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
     if !root.is_dir() {
         return Ok(Vec::new());
     }
     let mut modules = Vec::new();
-    for entry in std::fs::read_dir(root)? {
+    for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -85,12 +87,23 @@ pub fn discover() -> Result<Vec<Module>> {
         if !manifest_path.is_file() {
             continue;
         }
-        let manifest: Manifest = match std::fs::read_to_string(&manifest_path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-        {
-            Some(manifest) => manifest,
-            None => {
+        let text = match read_text_limited(&manifest_path, 64 * 1024) {
+            Ok(t) if t.len() <= 64 * 1024 => t,
+            Ok(_) => {
+                eprintln!(
+                    "Некорректный модуль (слишком большой): {}",
+                    manifest_path.display()
+                );
+                continue;
+            }
+            Err(_) => {
+                eprintln!("Некорректный модуль: {}", manifest_path.display());
+                continue;
+            }
+        };
+        let manifest: Manifest = match serde_json::from_str(&text) {
+            Ok(m) => m,
+            Err(_) => {
                 eprintln!("Некорректный модуль: {}", manifest_path.display());
                 continue;
             }
@@ -108,10 +121,36 @@ pub fn discover() -> Result<Vec<Module>> {
         } else {
             manifest.binary.clone()
         };
-        let executable = folder.join(name);
-        if !executable.is_file() {
-            eprintln!("Бинарник модуля не найден: {}", executable.display());
+        let executable = folder.join(&name);
+        let executable = match std::fs::canonicalize(&executable) {
+            Ok(p) if p.is_file() => p,
+            _ => {
+                eprintln!(
+                    "Бинарник модуля не найден: {}",
+                    folder.join(&name).display()
+                );
+                continue;
+            }
+        };
+        if !executable.starts_with(&root) {
+            eprintln!(
+                "Бинарник модуля вне директории модулей: {}",
+                executable.display()
+            );
             continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&executable) {
+                if meta.permissions().mode() & 0o022 != 0 {
+                    eprintln!(
+                        "Бинарник модуля доступен на запись группе/другим: {}",
+                        executable.display()
+                    );
+                    continue;
+                }
+            }
         }
         modules.push(Module {
             manifest,
@@ -190,19 +229,22 @@ impl Module {
             .spawn()?;
         let stdout = child.stdout.take().ok_or("Module stdout unavailable")?;
         let mut async_file = tokio::fs::File::from_std(file.reopen()?);
-        let copied = tokio::time::timeout(Duration::from_secs(180), async {
-            tokio::io::copy(&mut stdout.take(512 * 1024 * 1024 + 1), &mut async_file).await
+        tokio::time::timeout(Duration::from_secs(180), async {
+            let copied =
+                tokio::io::copy(&mut stdout.take(512 * 1024 * 1024 + 1), &mut async_file).await?;
+            if copied == 0 || copied > 512 * 1024 * 1024 {
+                return Err::<(), Box<dyn Error + Send + Sync>>(
+                    "Module audio is empty or exceeds 512 MiB".into(),
+                );
+            }
+            let status = child.wait().await?;
+            if !status.success() {
+                return Err(format!("Audio module exited: {status}").into());
+            }
+            async_file.flush().await?;
+            Ok(())
         })
         .await??;
-        if copied == 0 || copied > 512 * 1024 * 1024 {
-            child.kill().await?;
-            return Err("Module audio is empty or exceeds 512 MiB".into());
-        }
-        let status = child.wait().await?;
-        if !status.success() {
-            return Err(format!("Audio module exited: {status}").into());
-        }
-        async_file.sync_all().await?;
         Ok(file)
     }
 
@@ -223,20 +265,75 @@ impl Module {
 }
 
 pub fn playlist_file(id: &str) -> PathBuf {
-    mcz::paths::config_dir("mz").join(format!("{id}.playlist"))
+    // id is validated by discover(); still sanitize for any caller.
+    debug_assert!(valid_name(id), "playlist_file called with invalid id");
+    let safe = if valid_name(id) { id } else { "default" };
+    mcz::paths::config_dir("mz").join(format!("{safe}.playlist"))
 }
 
 pub fn selected_playlist(module: &Module) -> String {
-    std::fs::read_to_string(playlist_file(&module.manifest.id))
+    let raw = read_text_limited(&playlist_file(&module.manifest.id), 256)
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| module.manifest.default_playlist.clone())
+        .unwrap_or_else(|| module.manifest.default_playlist.clone());
+    if raw.is_empty() || raw.len() > 256 || raw.chars().any(char::is_control) {
+        module.manifest.default_playlist.clone()
+    } else {
+        raw
+    }
 }
 
 pub fn save_playlist(id: &str, playlist: &str) -> Result<()> {
+    if !valid_name(id) {
+        return Err(format!("Invalid module id: {id}").into());
+    }
+    if playlist.chars().any(char::is_control) {
+        return Err("Invalid playlist id".into());
+    }
+    let sanitized = playlist.trim();
+    if sanitized.is_empty() || sanitized.len() > 256 {
+        return Err("Invalid playlist id".into());
+    }
     let path = playlist_file(id);
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    std::fs::write(path, playlist)?;
+    // Atomic write + fsync to avoid partial/corrupt playlist files.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write;
+    tmp.write_all(sanitized.as_bytes())?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(&path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
+}
+
+fn read_text_limited(path: &Path, limit: u64) -> std::io::Result<String> {
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(limit + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File too large",
+        ));
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn oversized_manifest_read_is_bounded() {
+        use std::io::Write;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&vec![b'x'; 65537]).unwrap();
+        assert!(read_text_limited(file.path(), 65536).is_err());
+    }
 }

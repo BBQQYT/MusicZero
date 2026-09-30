@@ -12,7 +12,7 @@ pub fn config_dir(app: &str) -> PathBuf {
                 .join(app);
         }
     }
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(base).join(app);
     }
     std::env::var_os("HOME")
@@ -20,6 +20,7 @@ pub fn config_dir(app: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".").join(app))
 }
 
+#[allow(dead_code)]
 pub fn cache_dir(app: &str) -> PathBuf {
     if cfg!(windows) {
         if let Some(base) = std::env::var_os("LOCALAPPDATA") {
@@ -29,7 +30,7 @@ pub fn cache_dir(app: &str) -> PathBuf {
             return PathBuf::from(base).join("AppData").join("Local").join(app);
         }
     }
-    if let Some(base) = std::env::var_os("XDG_CACHE_HOME") {
+    if let Some(base) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(base).join(app);
     }
     std::env::var_os("HOME")

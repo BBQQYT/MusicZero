@@ -12,7 +12,7 @@ pub fn config_dir(app: &str) -> PathBuf {
                 .join(app);
         }
     }
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(base).join(app);
     }
     std::env::var_os("HOME")

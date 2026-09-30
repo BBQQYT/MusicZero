@@ -94,7 +94,11 @@ impl MprisPlayer {
     }
 
     // Установка ползунка в конкретную точку
-    async fn set_position(&self, _track_id: ObjectPath<'_>, position: i64) {
+    async fn set_position(&self, track_id: ObjectPath<'_>, position: i64) {
+        let metadata = self.metadata().await;
+        if metadata.get("mpris:trackid") != Some(&Value::from(track_id)) {
+            return;
+        }
         let _ = self.cmd_tx.send(PlayerCommand::SetPosition(position));
     }
 
@@ -175,10 +179,7 @@ pub fn build_metadata_map(
     path_prefix: &str,
 ) -> HashMap<String, Value<'static>> {
     let mut m = HashMap::new();
-    let sanitized_id: String = track_id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
+    let sanitized_id: String = track_id.bytes().map(|byte| format!("{byte:02x}")).collect();
     let path_str = if sanitized_id.is_empty() {
         "/org/mpris/MediaPlayer2/TrackList/NoTrack".to_string()
     } else {
@@ -241,6 +242,18 @@ pub async fn notify_seeked(conn: &Connection, position_us: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unicode_and_punctuation_track_ids_are_distinct_valid_paths() {
+        let ids = ["abc:123", "abc123", "песня", "曲"];
+        let mut paths = std::collections::HashSet::new();
+        for id in ids {
+            let metadata = build_metadata_map("", "", "", id, 0, "", "/org/mz/Track");
+            let path = metadata.get("mpris:trackid").unwrap().to_string();
+            assert!(!path.contains("NoTrack"));
+            assert!(paths.insert(path));
+        }
+    }
 
     #[test]
     fn provider_metadata_has_distinct_urls_and_valid_track_paths() {

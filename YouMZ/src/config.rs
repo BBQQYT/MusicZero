@@ -15,10 +15,14 @@ pub struct Config {
 fn read_file_or_env(file_name: &str, env_var: &str) -> Option<String> {
     {
         let path = config_dir(APP_DIR).join(file_name);
-        if let Ok(content) = fs::read_to_string(&path) {
-            let trimmed = content.trim().to_string();
-            if !trimmed.is_empty() {
-                return Some(trimmed);
+        if let Ok(meta) = fs::metadata(&path) {
+            if meta.len() <= 4096 {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let trimmed = content.trim().to_string();
+                    if !trimmed.is_empty() && trimmed.len() <= 4096 {
+                        return Some(trimmed);
+                    }
+                }
             }
         }
     }
@@ -26,7 +30,7 @@ fn read_file_or_env(file_name: &str, env_var: &str) -> Option<String> {
     env::var(env_var)
         .ok()
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && s.len() <= 4096)
 }
 
 pub fn load() -> Result<Config, String> {

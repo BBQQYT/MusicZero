@@ -134,28 +134,37 @@ fn find_browser() -> Result<Browser> {
     Err("Не найден Firefox, LibreWolf, Chromium или Chrome; задайте YOUMZ_BROWSER".into())
 }
 
-async fn launch(browser: &Browser, profile: &TempDir) -> Result<(Child, Option<u16>)> {
+async fn launch(
+    browser: &Browser,
+    profile: &TempDir,
+    debugging: bool,
+) -> Result<(Child, Option<u16>)> {
     let mut command = Command::new(&browser.path);
     let port = match browser.kind {
         Kind::Firefox => {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-            let port = listener.local_addr()?.port();
-            drop(listener);
             command
                 .arg("--no-remote")
                 .arg("--new-instance")
                 .arg("--profile")
-                .arg(profile.path())
-                .arg("--remote-debugging-port")
-                .arg(port.to_string());
-            Some(port)
+                .arg(profile.path());
+            if debugging {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+                let port = listener.local_addr()?.port();
+                drop(listener);
+                command.arg("--remote-debugging-port").arg(port.to_string());
+                Some(port)
+            } else {
+                None
+            }
         }
         Kind::Chromium => {
             command
                 .arg(format!("--user-data-dir={}", profile.path().display()))
-                .arg("--remote-debugging-port=0")
                 .arg("--no-first-run")
                 .arg("--no-default-browser-check");
+            if debugging {
+                command.arg("--remote-debugging-port=0");
+            }
             None
         }
     };
@@ -211,6 +220,7 @@ async fn connect(
 }
 
 async fn command(socket: &mut Socket, id: u64, method: &str, params: Value) -> Result<Value> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     socket
         .send(Message::Text(
             json!({"id":id,"method":method,"params":params})
@@ -219,7 +229,7 @@ async fn command(socket: &mut Socket, id: u64, method: &str, params: Value) -> R
         ))
         .await?;
     loop {
-        let message = tokio::time::timeout(Duration::from_secs(10), socket.next())
+        let message = tokio::time::timeout_at(deadline, socket.next())
             .await?
             .ok_or("Браузер закрыл соединение")??;
         if !message.is_text() {
@@ -276,9 +286,10 @@ fn session_from_browser(result: &Value) -> Option<String> {
         };
         if !name.is_empty()
             && !value.is_empty()
+            && !name.chars().any(char::is_control)
             && !name.contains(';')
             && !name.contains('=')
-            && !value.chars().any(|c| matches!(c, ';' | '\n' | '\r'))
+            && !value.chars().any(|c| c.is_control() || c == ';')
         {
             values.insert(name.to_owned(), value);
         }
@@ -310,49 +321,82 @@ async fn capture(
         command(&mut socket, id, "session.new", json!({"capabilities":{}})).await?;
         id += 1;
     }
-    eprintln!(
-        "Войдите в YouTube Music в открывшемся окне. Ожидаю завершения входа (Ctrl+C — отмена)..."
-    );
-    let mut last_attempt = String::new();
-    let mut last_attempt_at = Instant::now() - Duration::from_secs(10);
-    loop {
-        if child.try_wait()?.is_some() {
-            return Err("Окно входа закрыто".into());
-        }
-        let method = if matches!(browser.kind, Kind::Firefox) {
-            "storage.getCookies"
-        } else {
-            "Storage.getCookies"
-        };
-        let result = command(&mut socket, id, method, json!({})).await?;
-        id += 1;
-        if let Some(session) = session_from_browser(&result) {
-            if session != last_attempt || last_attempt_at.elapsed() >= Duration::from_secs(10) {
-                last_attempt = session.clone();
-                last_attempt_at = Instant::now();
-                let config = Arc::new(Config {
-                    cookie: Some(session.clone()),
-                    proxy: proxy.clone(),
-                });
-                let client = YtClient::new(config).await;
-                if client.list_playlists().await.is_ok() {
-                    return Ok(session);
-                }
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
+    eprintln!("Проверяю сохранённую сессию YouTube Music...");
+    let method = if matches!(browser.kind, Kind::Firefox) {
+        "storage.getCookies"
+    } else {
+        "Storage.getCookies"
+    };
+    let result = command(&mut socket, id, method, json!({})).await?;
+    let session = session_from_browser(&result)
+        .ok_or("Сессия не найдена. Повторите вход и закройте окно только после появления вашей библиотеки YouTube Music.")?;
+    let config = Arc::new(Config {
+        cookie: Some(session.clone()),
+        proxy: proxy.clone(),
+    });
+    let client = YtClient::new(config).await?;
+    client
+        .list_playlists()
+        .await
+        .map_err(|error| format!("Не удалось проверить сессию YouTube Music: {error}"))?;
+    Ok(session)
 }
 
 pub async fn login(proxy: &Option<String>) -> Result<String> {
     let browser = find_browser()?;
     let profile = TempDir::new()?;
-    let (mut child, port) = launch(&browser, &profile).await?;
+    let (mut child, _) = launch(&browser, &profile, false).await?;
     let result = tokio::select! {
-        result = capture(&browser, &profile, &mut child, port, proxy) => result,
+        result = async {
+            eprintln!("Войдите в YouTube Music в открывшемся окне браузера.");
+            eprintln!("Когда вход завершён и открылась ваша библиотека, закройте это окно. После этого сессия будет проверена автоматически (Ctrl+C — отмена).");
+            let status = child.wait().await?;
+            if !status.success() {
+                return Err(format!("Браузер завершился с ошибкой: {status}").into());
+            }
+            let (next_child, port) = launch(&browser, &profile, true).await?;
+            child = next_child;
+            capture(&browser, &profile, &mut child, port, proxy).await
+        } => result,
         _ = tokio::signal::ctrl_c() => Err("Вход отменён".into()),
     };
     let _ = child.kill().await;
     let _ = child.wait().await;
     result
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn login_window_has_no_debugging_flags_for_either_browser() {
+        let directory = TempDir::new().unwrap();
+        let executable = directory.path().join("browser");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0}.args\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for kind in [Kind::Firefox, Kind::Chromium] {
+            let browser = Browser {
+                path: executable.clone(),
+                kind,
+            };
+            let profile = TempDir::new().unwrap();
+            let (mut child, port) = launch(&browser, &profile, false).await.unwrap();
+            assert!(child.wait().await.unwrap().success());
+            assert!(port.is_none());
+            let args = std::fs::read_to_string(directory.path().join("browser.args")).unwrap();
+            assert!(args.contains("https://music.youtube.com/"));
+            assert!(args.contains(profile.path().to_str().unwrap()));
+            assert!(!args.contains("debugging"));
+            let (mut child, _) = launch(&browser, &profile, true).await.unwrap();
+            assert!(child.wait().await.unwrap().success());
+            let args = std::fs::read_to_string(directory.path().join("browser.args")).unwrap();
+            assert!(args.contains("--remote-debugging-port"));
+        }
+    }
 }
