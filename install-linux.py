@@ -290,7 +290,13 @@ def edit_settings(ui, executable, module):
         return
     while True:
         response = json.loads(run_command([executable, "settings", module], capture=True))
-        settings = response["settings"]
+        if not isinstance(response, dict):
+            raise RuntimeError("Provider settings must be a JSON object")
+        # The CLI prints the settings object itself; direct protocol responses
+        # from older integrations may still include the settings wrapper.
+        settings = response.get("settings", response)
+        if not isinstance(settings, dict):
+            raise RuntimeError("Provider settings must be a JSON object")
         keys = [key for key, value in settings.items() if isinstance(value, (str, int, bool))]
         if module == "icecast":
             # These editable aliases apply to the station chosen by `station`.
@@ -307,7 +313,10 @@ def edit_settings(ui, executable, module):
         if isinstance(current, bool):
             value = ["true", "false"][ui.choose(key, ["true", "false"])]
         else:
-            value = ui.text(key, "" if key == "password" else str(current), secret=key == "password")
+            secret = key in ("password", "token", "session")
+            value = ui.text(key, "" if secret else str(current), secret=secret)
+            if secret and not value:
+                continue
         try:
             run_command([executable, "set", module, key, value], capture=True)
         except RuntimeError as error:
@@ -318,6 +327,10 @@ def edit_settings(ui, executable, module):
 def configure(ui, executable):
     # Ignore dev module overrides: configure the installation we just created.
     os.environ.pop("MZ_MODULES_DIR", None)
+    native_config = 'mz config' in run_command([executable, 'help'], capture=True)
+    if not native_config:
+        print("Этот релиз ещё не содержит `mz config`. Для TUI обновите плеер после публикации новой сборки.",
+              flush=True)
     listing = run_command([executable, "modules"], capture=True)
     available = [module for module in ("local", "icecast", "ymz", "youmz")
                  if any(line.startswith(module + " —") for line in listing.splitlines())]

@@ -242,6 +242,35 @@ class InstallerTests(unittest.TestCase):
                                    ['set', 'icecast', 'station', 'one']])
         self.assertFalse(any('***' in args or 'stations' in args for args in changes))
 
+    def test_legacy_cli_flat_settings_are_edited_without_protocol_wrapper(self):
+        choices = iter([0, 1])
+        class UI:
+            def choose(self, title, options):
+                return next(choices)
+            def text(self, title, default='', secret=False):
+                return '/new music'
+        calls = []
+        def command(args, capture=False):
+            calls.append(args[1:])
+            return 'old help' if args[1] == 'help' else '{"path":"/old music"}'
+        with patch.object(installer, 'run_command', side_effect=command):
+            installer.edit_settings(UI(), self.destination / 'mz', 'local')
+        self.assertIn(['set', 'local', 'path', '/new music'], calls)
+
+    def test_native_settings_menu_bypasses_legacy_json_editor(self):
+        calls = []
+        def command(args, capture=False):
+            calls.append(args[1:])
+            return 'mz config [module]' if args[1] == 'help' else ''
+        with patch.object(installer, 'run_command', side_effect=command):
+            installer.edit_settings(None, self.destination / 'mz', 'ymz')
+        self.assertEqual(calls, [['help'], ['config', 'ymz']])
+
+    def test_invalid_settings_schema_returns_a_readable_error(self):
+        with patch.object(installer, 'run_command', side_effect=['old help', '[]']):
+            with self.assertRaisesRegex(RuntimeError, 'JSON object'):
+                installer.edit_settings(None, self.destination / 'mz', 'local')
+
     @unittest.skipUnless(sys.platform == 'linux', 'Linux controlling terminal')
     def test_piped_python_tui_login_reads_controlling_terminal(self):
         import fcntl
