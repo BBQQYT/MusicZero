@@ -19,9 +19,17 @@ with tempfile.TemporaryDirectory(prefix='mz-new-modules-') as tmp:
     pattern=bytearray(1024); pattern[0:4]=bytes([1,172,16,0]);pattern[4*16+2]=13
     mod+=pattern+bytes((int(100*math.sin(i*math.tau/64))%256 for i in range(64)))
     (library/'legacy.mod').write_bytes(mod)
+    # Distinct legacy byte filenames must survive the index and resolve to audio.
+    byte_names = [b'byte-\xff.flac', b'byte-\xfe.flac'] if os.name == 'posix' else []
+    for name in byte_names:
+        with open(os.fsencode(library) + b'/' + name, 'wb') as output:
+            output.write((library/'tone.flac').read_bytes())
     json_module('local','set-setting','path',str(library))
     tracks=json_module('local','tracks','all')['tracks']
-    assert len(tracks)==len(formats)+2,(len(tracks),len(formats))
+    assert len(tracks)==len(formats)+2+len(byte_names),(len(tracks),len(formats))
+    assert len({track['id'] for track in tracks})==len(tracks)
+    cached_tracks=json_module('local','tracks','all')['tracks']
+    assert {track['id'] for track in cached_tracks}=={track['id'] for track in tracks}
     assert any(t['title']=='MusicZero-ogg' and t['artist']=='Synthetic' for t in tracks)
     for track in tracks:
         audio=module('local','audio',track['id']); assert audio.startswith(b'fLaC')
@@ -66,6 +74,8 @@ with tempfile.TemporaryDirectory(prefix='mz-new-modules-') as tmp:
             else: raise RuntimeError('Radio failed to play: '+output)
             assert marker.exists()
             print('Icecast: infinite HTTP station with Basic auth started playing before EOF.',flush=True)
+            no_seek=subprocess.run([host,'seek','10'],env=env,capture_output=True,text=True,timeout=10)
+            assert no_seek.returncode!=0 and 'прямого эфира' in no_seek.stderr,no_seek.stderr
             cli('set','icecast','buffer_ms','500')
             cli('switch','local')
             for _ in range(300):

@@ -39,6 +39,8 @@ pub struct Track {
     pub stream: bool,
     #[serde(default = "default_buffer_ms")]
     pub buffer_ms: u32,
+    #[serde(default)]
+    pub feedback: String,
 }
 
 fn default_buffer_ms() -> u32 {
@@ -52,8 +54,10 @@ pub struct Playlist {
 }
 
 #[derive(Deserialize)]
-struct TrackList {
-    tracks: Vec<Track>,
+pub struct TrackList {
+    pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub continuous: bool,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +75,10 @@ fn valid_name(value: &str) -> bool {
 pub fn module_dir() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("MZ_MODULES_DIR") {
         return Ok(PathBuf::from(path));
+    }
+    let settings = crate::config::Settings::load()?;
+    if !settings.modules_dir.is_empty() {
+        return Ok(PathBuf::from(settings.modules_dir));
     }
     Ok(std::env::current_exe()?
         .parent()
@@ -170,30 +178,68 @@ pub fn discover() -> Result<Vec<Module>> {
 }
 
 impl Module {
+    pub(crate) fn command(&self, action: &str) -> Result<Command> {
+        let settings = crate::config::Settings::load()?;
+        let mut command = Command::new(&self.executable);
+        command
+            .arg(action)
+            .env("MZ_LANGUAGE", settings.language.code());
+        if !settings.temp_dir.is_empty() {
+            for key in ["TMPDIR", "TMP", "TEMP"] {
+                command.env(key, &settings.temp_dir);
+            }
+        }
+        Ok(command)
+    }
     pub async fn json(&self, command: &str, args: &[&str]) -> Result<Value> {
-        let mut child = Command::new(&self.executable)
-            .arg(command)
+        self.json_request(command, args, false).await
+    }
+    pub async fn config_json(&self, command: &str, args: &[&str]) -> Result<Value> {
+        self.json_request(command, args, true).await
+    }
+    async fn json_request(&self, command: &str, args: &[&str], capture: bool) -> Result<Value> {
+        let mut child = self
+            .command(command)?
             .args(args)
             .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(if capture {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            })
             .spawn()?;
         let stdout = child.stdout.take().ok_or("Module stdout unavailable")?;
+        let stderr = child.stderr.take();
         let response = tokio::time::timeout(Duration::from_secs(90), async {
-            let mut bytes = Vec::new();
-            stdout
-                .take(4 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .await?;
+            let output = async {
+                let mut bytes = Vec::new();
+                stdout
+                    .take(4 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .await?;
+                Ok::<_, std::io::Error>(bytes)
+            };
+            let errors = async {
+                let mut bytes = Vec::new();
+                if let Some(stderr) = stderr {
+                    stderr.take(64 * 1024).read_to_end(&mut bytes).await?;
+                }
+                Ok::<_, std::io::Error>(bytes)
+            };
+            let (bytes, errors) = tokio::try_join!(output, errors)?;
             if bytes.len() > 4 * 1024 * 1024 {
                 return Err("Module JSON response exceeds 4 MiB".into());
             }
             let status = child.wait().await?;
             if !status.success() {
-                return Err(
-                    format!("{}: command {command} exited: {status}", self.manifest.id).into(),
-                );
+                return Err(format!(
+                    "{}: {command}: {status}\n{}",
+                    self.manifest.id,
+                    String::from_utf8_lossy(&errors)
+                )
+                .into());
             }
             Ok::<_, Box<dyn Error + Send + Sync>>(bytes)
         })
@@ -202,7 +248,7 @@ impl Module {
     }
 
     pub async fn validate(&self) -> Result<()> {
-        let info = self.json("info", &[]).await?;
+        let info = self.config_json("info", &[]).await?;
         if info["protocol"] != self.manifest.protocol
             || info["id"] != self.manifest.id
             || info["name"] != self.manifest.name
@@ -221,14 +267,18 @@ impl Module {
         Ok(serde_json::from_value::<PlaylistList>(self.json("playlists", &[]).await?)?.playlists)
     }
 
-    pub async fn tracks(&self, playlist: &str) -> Result<Vec<Track>> {
-        Ok(serde_json::from_value::<TrackList>(self.json("tracks", &[playlist]).await?)?.tracks)
+    pub async fn tracks(&self, playlist: &str, after: Option<&str>) -> Result<TrackList> {
+        let mut args = vec![playlist];
+        if let Some(after) = after {
+            args.push(after);
+        }
+        Ok(serde_json::from_value(self.json("tracks", &args).await?)?)
     }
 
     pub async fn audio(&self, track_id: &str) -> Result<NamedTempFile> {
-        let file = NamedTempFile::new()?;
-        let mut child = Command::new(&self.executable)
-            .arg("audio")
+        let file = crate::config::temp_file()?;
+        let mut child = self
+            .command("audio")?
             .arg(track_id)
             .kill_on_drop(true)
             .stdin(Stdio::null())
@@ -257,8 +307,8 @@ impl Module {
     }
 
     pub async fn login(&self) -> Result<()> {
-        let status = Command::new(&self.executable)
-            .arg("login")
+        let status = self
+            .command("login")?
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())

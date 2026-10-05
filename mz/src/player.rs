@@ -1,5 +1,6 @@
 use crate::ipc::ControlRequest;
 use crate::plugin::{self, Module, Track};
+use crate::seek::SeekRequest;
 use mcz::mpris::{build_metadata_map, notify_changed, MprisPlayer, MprisRoot, PlayerCommand};
 use rodio::{Decoder, Sink};
 use serde_json::{json, Value};
@@ -32,6 +33,13 @@ pub struct Player {
     art_url: Arc<RwLock<String>>,
     track_id: Arc<RwLock<String>>,
     duration_us: Arc<RwLock<i64>>,
+    seekable: Arc<RwLock<bool>>,
+    feedback: crate::feedback::Worker,
+    continuous: bool,
+    after: Option<String>,
+    recent: VecDeque<String>,
+    played: Duration,
+    playing_since: Option<Instant>,
 }
 
 impl Player {
@@ -45,6 +53,7 @@ impl Player {
         let art_url = Arc::new(RwLock::new(String::new()));
         let track_id = Arc::new(RwLock::new(String::new()));
         let duration_us = Arc::new(RwLock::new(0i64));
+        let seekable = Arc::new(RwLock::new(false));
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let mpris = if cfg!(target_os = "linux") {
             let player = MprisPlayer {
@@ -55,6 +64,7 @@ impl Player {
                 current_art_url: art_url.clone(),
                 current_track_id: track_id.clone(),
                 current_duration_us: duration_us.clone(),
+                current_can_seek: seekable.clone(),
                 track_url_prefix: "",
                 track_path_prefix: "/org/mz/Track",
             };
@@ -102,6 +112,13 @@ impl Player {
                 art_url,
                 track_id,
                 duration_us,
+                seekable,
+                feedback: crate::feedback::Worker::new(),
+                continuous: false,
+                after: None,
+                recent: VecDeque::new(),
+                played: Duration::ZERO,
+                playing_since: None,
             },
             cmd_rx,
         )
@@ -111,7 +128,7 @@ impl Player {
         &self.modules[self.selected]
     }
 
-    fn status(&self) -> Value {
+    async fn status(&self) -> Value {
         let status = if !self.active {
             "Paused"
         } else if self.current.is_some() && !self.sink.empty() {
@@ -121,14 +138,81 @@ impl Player {
         };
         json!({"module": self.module().manifest.id, "name": self.module().manifest.name,
             "playlist": self.playlist, "status": status,
+            "track_id": self.current.as_ref().map(|t| t.id.as_str()).unwrap_or(""),
             "title": self.current.as_ref().map(|t| t.title.as_str()).unwrap_or(""),
-            "artist": self.current.as_ref().map(|t| t.artist.as_str()).unwrap_or("")})
+            "artist": self.current.as_ref().map(|t| t.artist.as_str()).unwrap_or(""),
+            "position_ms": self.sink.get_pos().as_millis().min(u64::MAX as u128) as u64,
+            "duration_ms": if self.current.is_some() { (*self.duration_us.read().await).max(0) / 1000 } else { 0 },
+            "can_seek": self.current.as_ref().is_some_and(|track| !track.stream) && !self.sink.empty()})
     }
 
-    fn clear_current(&mut self) {
+    fn set_active(&mut self, active: bool) {
+        if let Some(since) = self.playing_since.take() {
+            self.played = self.played.saturating_add(since.elapsed());
+        }
+        self.active = active;
+        if active && self.current.is_some() {
+            self.playing_since = Some(Instant::now());
+        }
+    }
+
+    fn reset_continuation(&mut self) {
+        self.continuous = false;
+        self.after = None;
+        self.recent.clear();
+    }
+
+    fn accept_tracks(&mut self, mut batch: plugin::TrackList) {
+        self.continuous = batch.continuous;
+        if batch.continuous {
+            let mut seen: std::collections::HashSet<String> = self.recent.iter().cloned().collect();
+            seen.extend(self.queue.iter().map(|track| track.id.clone()));
+            if let Some(track) = &self.current {
+                seen.insert(track.id.clone());
+            }
+            batch.tracks.retain(|track| seen.insert(track.id.clone()));
+        }
+        self.queue.extend(batch.tracks);
+    }
+
+    async fn clear_current(&mut self, event: &'static str) {
+        if let Some(track) = &self.current {
+            let played = self.played.saturating_add(
+                self.playing_since
+                    .map(|since| since.elapsed())
+                    .unwrap_or_default(),
+            );
+            self.feedback
+                .sender
+                .emit(self.module().clone(), track, event, played);
+            if self.continuous {
+                self.after = Some(track.id.clone());
+                self.recent.push_back(track.id.clone());
+                if self.recent.len() > 256 {
+                    self.recent.pop_front();
+                }
+            }
+        }
+        self.played = Duration::ZERO;
+        self.playing_since = None;
         self.sink.stop();
         self.current = None;
         self.current_file = None;
+        *self.seekable.write().await = false;
+        *self.duration_us.write().await = 0;
+        self.title.write().await.clear();
+        self.artist.write().await.clear();
+        self.art_url.write().await.clear();
+        self.track_id.write().await.clear();
+        if let Some(connection) = &self.mpris {
+            let mut changed = HashMap::new();
+            changed.insert("CanSeek", BusValue::from(false));
+            changed.insert(
+                "Metadata",
+                BusValue::from(build_metadata_map("", "", "", "", 0, "", "/org/mz/Track")),
+            );
+            notify_changed(connection, changed).await;
+        }
     }
 
     async fn notify_status(&self, status: &str) {
@@ -142,17 +226,17 @@ impl Player {
     async fn handle_mpris(&mut self, command: PlayerCommand) {
         match command {
             PlayerCommand::Play => {
-                self.active = true;
+                self.set_active(true);
                 self.sink.play();
                 self.notify_status("Playing").await;
             }
             PlayerCommand::Pause => {
-                self.active = false;
+                self.set_active(false);
                 self.sink.pause();
                 self.notify_status("Paused").await;
             }
             PlayerCommand::PlayPause => {
-                self.active = !self.active;
+                self.set_active(!self.active);
                 if self.active {
                     self.sink.play();
                     self.notify_status("Playing").await;
@@ -165,56 +249,80 @@ impl Player {
                 self.generation = self.generation.wrapping_add(1);
                 self.retry_at = Instant::now();
                 self.active = true;
-                self.clear_current();
+                self.clear_current("skip").await;
             }
             PlayerCommand::Stop => {
                 self.active = false;
-                self.clear_current();
+                self.clear_current("skip").await;
                 self.notify_status("Stopped").await;
             }
             PlayerCommand::Seek(offset) => {
-                if self.current.as_ref().is_some_and(|track| track.stream) {
-                    return;
-                }
-                let total = *self.duration_us.read().await;
-                let target = (self.sink.get_pos().as_micros() as i64)
-                    .saturating_add(offset)
-                    .clamp(0, total.max(0));
-                if self
-                    .sink
-                    .try_seek(Duration::from_micros(target as u64))
-                    .is_ok()
-                {
-                    if let Some(connection) = &self.mpris {
-                        mcz::mpris::notify_seeked(connection, target).await;
-                    }
+                if let Err(error) = self.seek(SeekRequest::Relative(offset)).await {
+                    log::debug!("MPRIS seek: {error}");
                 }
             }
             PlayerCommand::SetPosition(position) => {
-                if self.current.as_ref().is_some_and(|track| track.stream) {
-                    return;
-                }
-                let total = *self.duration_us.read().await;
-                let target = position.clamp(0, total.max(0));
-                if self
-                    .sink
-                    .try_seek(Duration::from_micros(target as u64))
-                    .is_ok()
-                {
-                    if let Some(connection) = &self.mpris {
-                        mcz::mpris::notify_seeked(connection, target).await;
+                if position >= 0 {
+                    if let Err(error) = self.seek(SeekRequest::Absolute(position)).await {
+                        log::debug!("MPRIS set position: {error}");
                     }
                 }
             }
         }
     }
 
+    async fn seek(&mut self, request: SeekRequest) -> Result<u64> {
+        let track = self
+            .current
+            .as_ref()
+            .ok_or("Нет текущего трека для перемотки")?;
+        if track.stream {
+            return Err("Перемотка недоступна для прямого эфира".into());
+        }
+        if self.sink.empty() {
+            return Err("Трек уже завершён".into());
+        }
+        let position = self.sink.get_pos().as_micros().min(i64::MAX as u128) as i64;
+        let target = request.target(position, *self.duration_us.read().await);
+        self.sink
+            .try_seek(Duration::from_micros(target))
+            .map_err(|error| format!("Не удалось перемотать трек: {error}"))?;
+        let actual = self.sink.get_pos().as_micros().min(u64::MAX as u128) as u64;
+        if let Some(connection) = &self.mpris {
+            mcz::mpris::notify_seeked(connection, actual.min(i64::MAX as u64) as i64).await;
+        }
+        Ok(actual)
+    }
+
     async fn handle_control(&mut self, request: ControlRequest) -> bool {
         let action = request.request["action"].as_str().unwrap_or("");
         let value = request.request["value"].as_str().unwrap_or("");
+        if matches!(action, "set-setting" | "playlist")
+            && request.request["module"]
+                .as_str()
+                .is_some_and(|id| id != self.module().manifest.id)
+        {
+            let _ = request
+                .answer
+                .send(json!({"error":"Active module changed; retry the setting"}));
+            return false;
+        }
         let reply = match action {
             "ping" => json!({"ok":true}),
-            "status" => self.status(),
+            "status" => self.status().await,
+            "seek" => {
+                let result = match SeekRequest::from_wire(
+                    value,
+                    request.request["key"].as_str().unwrap_or(""),
+                ) {
+                    Ok(seek) => self.seek(seek).await,
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(position) => json!({"ok":true,"position_ms":position / 1000}),
+                    Err(error) => json!({"error":error.to_string()}),
+                }
+            }
             "modules" => {
                 json!({"modules": self.modules.iter().map(|m| json!({"id":m.manifest.id,"name":m.manifest.name})).collect::<Vec<_>>() })
             }
@@ -228,7 +336,7 @@ impl Player {
             }
             "toggle" => {
                 self.handle_mpris(PlayerCommand::PlayPause).await;
-                self.status()
+                self.status().await
             }
             "next" => {
                 self.handle_mpris(PlayerCommand::Next).await;
@@ -244,11 +352,12 @@ impl Player {
                         match modules[index].validate().await {
                             Ok(()) => {
                                 self.generation = self.generation.wrapping_add(1);
+                                self.clear_current("skip").await;
+                                self.reset_continuation();
                                 self.modules = modules;
                                 self.selected = index;
                                 self.playlist = plugin::selected_playlist(self.module());
                                 self.queue.clear();
-                                self.clear_current();
                                 self.active = true;
                                 self.retry_at = Instant::now();
                                 json!({"ok":true,"module":value})
@@ -267,7 +376,8 @@ impl Player {
                     self.retry_at = Instant::now();
                     self.playlist = value.trim().into();
                     self.queue.clear();
-                    self.clear_current();
+                    self.clear_current("skip").await;
+                    self.reset_continuation();
                     self.active = true;
                     json!({"ok":true})
                 }
@@ -289,11 +399,16 @@ impl Player {
             }
             "set-setting" if matches!(self.module().manifest.id.as_str(), "local" | "icecast") => {
                 let key = request.request["key"].as_str().unwrap_or("");
-                match self.module().json("set-setting", &[key, value]).await {
+                match self
+                    .module()
+                    .config_json("set-setting", &[key, value])
+                    .await
+                {
                     Ok(reply) => {
                         self.generation = self.generation.wrapping_add(1);
                         self.queue.clear();
-                        self.clear_current();
+                        self.clear_current("skip").await;
+                        self.reset_continuation();
                         self.retry_at = Instant::now();
                         reply
                     }
@@ -307,9 +422,9 @@ impl Player {
                 let value = value.to_owned();
                 tokio::spawn(async move {
                     let result = if is_settings {
-                        module.json("settings", &[]).await
+                        module.config_json("settings", &[]).await
                     } else {
-                        module.json("set-setting", &[&key, &value]).await
+                        module.config_json("set-setting", &[&key, &value]).await
                     };
                     let reply = result.unwrap_or_else(|error| json!({"error":error.to_string()}));
                     let _ = request.answer.send(reply);
@@ -333,10 +448,15 @@ impl Player {
 
     async fn begin_track<S: rodio::Source + Send + 'static>(
         &mut self,
-        track: Track,
+        mut track: Track,
         source: S,
         file: Option<NamedTempFile>,
     ) -> Result<()> {
+        if track.stream {
+            track.duration_ms = 0;
+        } else if let Some(duration) = source.total_duration() {
+            track.duration_ms = duration.as_millis().min((i64::MAX / 1000) as u128) as i64;
+        }
         self.sink.stop();
         self.sink.append(source);
         self.sink.play();
@@ -346,6 +466,7 @@ impl Player {
         *self.track_id.write().await = format!("{}_{}", self.module().manifest.id, track.id);
         let clamped_ms = track.duration_ms.clamp(0, i64::MAX / 1000);
         *self.duration_us.write().await = clamped_ms * 1000;
+        *self.seekable.write().await = !track.stream;
         if let Some(connection) = &self.mpris {
             let meta = build_metadata_map(
                 &track.title,
@@ -358,6 +479,7 @@ impl Player {
             );
             let mut changed = HashMap::new();
             changed.insert("Metadata", BusValue::from(meta));
+            changed.insert("CanSeek", BusValue::from(!track.stream));
             changed.insert("PlaybackStatus", BusValue::from("Playing"));
             notify_changed(connection, changed).await;
         }
@@ -367,6 +489,14 @@ impl Player {
             track.title,
             self.module().manifest.id
         );
+        self.feedback.sender.emit(
+            self.module().clone(),
+            &track,
+            "trackStarted",
+            Duration::ZERO,
+        );
+        self.played = Duration::ZERO;
+        self.playing_since = Some(Instant::now());
         self.current = Some(track);
         self.current_file = file;
         Ok(())
@@ -379,7 +509,7 @@ enum Audio {
 }
 
 enum Loaded {
-    Tracks(Result<Vec<Track>>),
+    Tracks(Result<plugin::TrackList>),
     Audio(Track, Result<Audio>),
 }
 
@@ -400,7 +530,14 @@ impl Preload {
         }
     }
 
-    fn start(&mut self, module: Module, playlist: String, queue: &mut VecDeque<Track>) {
+    fn start(
+        &mut self,
+        module: Module,
+        playlist: String,
+        queue: &mut VecDeque<Track>,
+        after: Option<String>,
+        feedback: crate::feedback::Sender,
+    ) {
         if self.pending.is_some() || self.ready.is_some() {
             return;
         }
@@ -418,7 +555,12 @@ impl Preload {
             }));
         } else {
             self.pending = Some(Box::pin(async move {
-                Loaded::Tracks(module.tracks(&playlist).await)
+                if after.is_some() {
+                    if let Err(error) = feedback.drain().await {
+                        return Loaded::Tracks(Err(error));
+                    }
+                }
+                Loaded::Tracks(module.tracks(&playlist, after.as_deref()).await)
             }));
         }
     }
@@ -453,8 +595,8 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
     tokio::pin!(shutdown);
     loop {
         if player.current.is_some() && player.sink.empty() {
-            player.current = None;
-            player.current_file = None;
+            player.clear_current("trackFinished").await;
+            player.retry_at = Instant::now();
         }
         if player.active && player.current.is_none() {
             if let Some((track, file)) = preload.ready.take() {
@@ -491,6 +633,8 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 player.module().clone(),
                 player.playlist.clone(),
                 &mut player.queue,
+                player.after.clone(),
+                player.feedback.sender.clone(),
             );
         }
         tokio::select! {
@@ -498,8 +642,11 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 preload.pending = None;
                 preload.loading_track = None;
                 match result {
-                    Loaded::Tracks(Ok(tracks)) if !tracks.is_empty() => {
-                        player.queue.extend(tracks);
+                    Loaded::Tracks(Ok(batch)) if !batch.tracks.is_empty() => {
+                        player.accept_tracks(batch);
+                        if player.queue.is_empty() {
+                            player.retry_at = Instant::now() + Duration::from_secs(5);
+                        }
                     }
                     Loaded::Audio(track, Ok(file)) => {
                         preload.ready = Some((track, file));
@@ -546,7 +693,8 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
         }
     }
     preload.clear();
-    player.sink.stop();
+    player.clear_current("skip").await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), player.feedback.sender.drain()).await;
     Ok(())
 }
 
@@ -576,6 +724,7 @@ mod tests {
             duration_ms: 120,
             stream: false,
             buffer_ms: 1000,
+            feedback: String::new(),
         }
     }
 
@@ -611,9 +760,22 @@ mod tests {
         sink.append(decode_audio(&first).unwrap());
         let mut queue = VecDeque::from([track("second"), track("third")]);
         let mut preload = Preload::new();
-        preload.start(module.clone(), "main".into(), &mut queue);
+        let feedback = crate::feedback::Worker::new();
+        preload.start(
+            module.clone(),
+            "main".into(),
+            &mut queue,
+            None,
+            feedback.sender.clone(),
+        );
         // Starting again must not remove another queued track or start another process.
-        preload.start(module, "main".into(), &mut queue);
+        preload.start(
+            module,
+            "main".into(),
+            &mut queue,
+            None,
+            feedback.sender.clone(),
+        );
         assert_eq!(queue.front().unwrap().id, "third");
         let loaded = tokio::time::timeout(Duration::from_secs(5), preload.pending.take().unwrap())
             .await

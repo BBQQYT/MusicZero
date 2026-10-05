@@ -40,6 +40,7 @@ impl Default for Settings {
 #[derive(Clone, Serialize, Deserialize)]
 struct Entry {
     id: String,
+    #[serde(with = "index_path_serde")]
     path: PathBuf,
     size: u64,
     modified: u128,
@@ -47,6 +48,49 @@ struct Entry {
     artist: String,
     duration_ms: i64,
 }
+// Keep existing UTF-8 index entries readable; Unix byte names need a lossless
+// representation as well, otherwise saving the entire library fails.
+mod index_path_serde {
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(
+        path: &Path,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            match path.to_str() {
+                Some(text) => text.serialize(serializer),
+                None => path.as_os_str().as_bytes().serialize(serializer),
+            }
+        }
+        #[cfg(not(unix))]
+        path.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<PathBuf, D::Error> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum StoredPath {
+                Text(String),
+                Bytes(Vec<u8>),
+            }
+            Ok(match StoredPath::deserialize(deserializer)? {
+                StoredPath::Text(text) => PathBuf::from(text),
+                StoredPath::Bytes(bytes) => PathBuf::from(std::ffi::OsString::from_vec(bytes)),
+            })
+        }
+        #[cfg(not(unix))]
+        PathBuf::deserialize(deserializer)
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Index {
     root: PathBuf,
@@ -146,6 +190,14 @@ fn tag<'a>(info: &'a Value, name: &str) -> Option<&'a str> {
         })
 }
 
+fn track_id(relative: &Path) -> String {
+    // Lossy UTF-8 conversion can map distinct Unix filenames to the same id.
+    format!(
+        "{:x}",
+        Sha256::digest(relative.as_os_str().as_encoded_bytes())
+    )
+}
+
 async fn scan(settings: &Settings) -> Result<Index> {
     let root = root(settings)?;
     let check = tokio::process::Command::new(&settings.ffprobe)
@@ -188,7 +240,9 @@ async fn scan(settings: &Settings) -> Result<Index> {
             .get(&relative)
             .filter(|e| e.size == meta.len() && e.modified == modified)
         {
-            index.entries.push(entry.clone());
+            let mut entry = entry.clone();
+            entry.id = track_id(&relative);
+            index.entries.push(entry);
             continue;
         }
         let settings = settings.clone();
@@ -205,10 +259,7 @@ async fn scan(settings: &Settings) -> Result<Index> {
                 .or_else(|| info["streams"][0]["duration"].as_str())
                 .and_then(|s| s.parse::<f64>().ok())
                 .unwrap_or(0.0);
-            let id = format!(
-                "{:x}",
-                Sha256::digest(relative.to_string_lossy().as_bytes())
-            );
+            let id = track_id(&relative);
             Some(Entry {
                 id,
                 path: relative,
@@ -291,6 +342,10 @@ fn set(settings: &mut Settings, key: &str, value: &str) -> Result<()> {
         "ffprobe" => settings.ffprobe = support::text(value, 4096)?,
         "fluidsynth" => settings.fluidsynth = support::text(value, 4096)?,
         "soundfont" => {
+            if value.is_empty() {
+                settings.soundfont.clear();
+                return Ok(());
+            }
             let path = std::fs::canonicalize(value)?;
             if !path.is_file() {
                 return Err("soundfont must be an SF2/SF3 file".into());
@@ -404,6 +459,45 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_filenames_have_distinct_track_ids() {
+        use std::os::unix::ffi::OsStringExt;
+        let first = PathBuf::from(std::ffi::OsString::from_vec(b"song-\xff.flac".to_vec()));
+        let second = PathBuf::from(std::ffi::OsString::from_vec(b"song-\xfe.flac".to_vec()));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(track_id(&first), track_id(&second));
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let entries = [first, second]
+            .into_iter()
+            .map(|path| {
+                std::fs::write(root.join(&path), b"audio").unwrap();
+                Entry {
+                    id: track_id(&path),
+                    path,
+                    size: 5,
+                    modified: 0,
+                    title: "song".into(),
+                    artist: String::new(),
+                    duration_ms: 0,
+                }
+            })
+            .collect();
+        let index = Index {
+            root: root.clone(),
+            entries,
+        };
+        let saved = serde_json::to_vec(&index).unwrap();
+        let restored: Index = serde_json::from_slice(&saved).unwrap();
+        for entry in &index.entries {
+            assert_eq!(
+                resolve(&restored, &root, &entry.id).unwrap(),
+                root.join(&entry.path)
+            );
+        }
+    }
+
     #[test]
     fn ogg_stream_tags_and_case_are_supported() {
         let info = json!({"streams":[{"tags":{"TITLE":"Old song", "ARTIST":"Artist"}}]});

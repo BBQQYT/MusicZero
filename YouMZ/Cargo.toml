@@ -19,6 +19,7 @@ rustypipe = { version = "0.11.4", features = ["userdata"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.30"
 tempfile = "3"
+mz-module-support = { version = "0.1.0", path = "../ModuleSupport" }
 [[bin]]
 name = "youmz-module"
 path = "src/bin/youmz-module.rs"

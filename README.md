@@ -16,6 +16,17 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 The installer chooses the newest published release containing a Linux archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
 
+The installer opens a terminal wizard automatically, including when piped from `curl`. Use Up/Down (or j/k), Enter to confirm, and Esc to cancel. It lets you choose the prefix, optionally add `mz` to Bash/Zsh/Fish PATH, install missing runtime packages using apt/dnf/pacman/zypper (sudo may prompt), configure Local and Icecast, and log into Yandex/YouTube Music. Advanced settings include FFmpeg paths, SoundFont, radio proxy/TLS/buffering and Yandex mix preferences. YouTube login needs Firefox or Chromium/Chrome and a graphical session. Package installation and shell edits are optional; configuration can be retried without reinstalling.
+
+```sh
+# Reopen setup for an existing installation
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --tui --setup-only
+# Automation: install binaries without prompts
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --non-interactive
+```
+
+`--tui` requires a controlling terminal (`/dev/tty`) with `TERM` set; without a terminal the default is install-only. The wizard uses Python's standard `curses` module and requires no dialog package. Missing packages are checked for the selected source, not installed automatically. Pressing Esc leaves completed installation/settings intact. During updates all files are staged before replacement and existing files are restored if replacement fails; this does not provide a transaction across power loss or concurrent installer runs. User settings and custom modules are preserved. A running player should be restarted after an update.
+
 If the installer reports that its directory is outside `PATH`, add it to your shell configuration:
 
 ```sh
@@ -98,13 +109,15 @@ mz quit
 | `mz start <id>` or `mz <id>` | Start a provider, or switch the running host to it |
 | `mz switch <id>` | Switch the running host; clear the current track and queue |
 | `mz login <id>` | Run that provider's interactive login |
-| `mz status` | Show provider, playlist, playback state and current track |
+| `mz status` | Show provider, playlist, current track and position/duration |
+| `mz seek <time>` | Seek to seconds or MM:SS/HH:MM:SS; a leading +/− means relative offset |
 | `mz play`, `mz pause`, `mz toggle` | Playback controls |
 | `mz next` | Skip the current track; for radio, reconnect to the selected station |
 | `mz stop` | Stop playback while keeping the host running |
 | `mz quit` | Exit the host |
 | `mz playlists` | List active provider's playlists/stations |
 | `mz playlist <id\|number>` | Select an ID or a **1-based** number; `mz playlist` shows the selection |
+| `mz config [id]` / `mz tui [id]` | Complete settings TUI with Russian/English selection; works while the player is stopped |
 | `mz settings` | Read the active provider's settings |
 | `mz settings <id>` | Read a provider's settings even before startup |
 | `mz set <key> <value>` | Change a setting of the active provider |
@@ -112,6 +125,30 @@ mz quit
 | `mz help`, `mz version` | Show help/version |
 
 Provider names are case-insensitive in CLI lookup. Quote paths, URLs and JSON values as needed. Local/Icecast settings changes reset the active provider's queue and loading state; an invalid setting returns an error. Other control and playlist commands require a running host.
+
+Seeking works on downloaded finite audio from YMZ, YouMZ and Local, including while paused. It keeps the current track and preloaded next track. `status` shows the current position and decoded duration when available. The decoder's duration takes precedence over provider metadata; unknown duration does not force seeks back to zero. Targets are limited to the start/end when duration is known. Live Icecast radio cannot seek. Linux MPRIS Seek/SetPosition use the same handler and emit Seeked; SetPosition ignores stale track IDs.
+
+```sh
+mz seek 90       # absolute: 90 seconds
+mz seek 1:30.5   # absolute: 90.5 seconds
+mz seek +15     # forward 15 seconds
+mz seek -10     # backward 10 seconds
+```
+
+## Settings menu
+
+```sh
+mz config          # All settings
+mz config icecast  # Open a provider directly
+```
+
+The built-in menu does not require Python. Use arrows or j/k to select, Enter to open/save, Esc to go back or cancel input, Ctrl+U to clear a field, and Ctrl+C to exit. Paste, Unicode, scrolling and terminal resizing are supported. “Language / Язык” switches every menu and hint between Russian and English; the choice is saved in `mz/settings.json`.
+
+The menu includes every `settings` field returned by installed modules, including new third-party fields. It covers all Local options, YMZ wave mood/variety/song language and token/login, YouMZ proxy/browser/session, playlists and all Icecast settings. Add, edit and remove stations through forms, including IDs, server URLs, mountpoints and credentials. Passwords and tokens are masked; editing another field preserves the existing password. Login opens the provider’s normal flow and returns to the menu.
+
+Changes save on confirmation and are validated by the provider; errors appear inside the menu. Playlists can be selected before starting playback. Active Local/Icecast changes use IPC to discard obsolete downloads. Wave preferences require login and network access; menus and login remain available when the service is unavailable.
+
+Player settings include the modules folder, log filter and temporary audio folder. Empty values restore defaults. `MZ_MODULES_DIR` and `RUST_LOG` override saved values; restart the player for these changes. The temporary audio folder applies to new downloads and provider processes. Config/cache paths and active environment overrides are also displayed.
 
 ## Yandex Music (YMZ)
 
@@ -161,7 +198,7 @@ mz playlist RDMM
 | `~/.config/youmz/session` | Saved session; `%APPDATA%\youmz\session` on Windows |
 | `~/.config/youmz/proxy` / `YOUMZ_PROXY` | Optional proxy; a nonempty proxy file takes precedence over the environment variable |
 
-YouMZ currently returns an empty `settings` object; browser/session/proxy configuration uses the files and environment variables above. If Google rejects sign-in, check whether the account can sign in through a browser opened normally, then retry MusicZero's temporary-profile flow. Old OAuth-client error messages indicate outdated provider binaries; update the host **and** its modules.
+YouMZ exposes `proxy`, `browser` and a masked `session` through `mz config youmz` and `mz settings youmz`. Use `mz set youmz <key> <value>` for scripts. A saved browser path is used unless `YOUMZ_BROWSER` overrides it. If Google rejects sign-in, check whether the account can sign in through a browser opened normally, then retry MusicZero's temporary-profile flow. Old OAuth-client error messages indicate outdated provider binaries; update the host **and** its modules.
 
 ## Local music folder
 
@@ -171,7 +208,7 @@ mz settings local
 mz local
 ```
 
-Set `path` to an existing directory. `mz switch local` switches an already running host. The Local playlist is `all`. Scanning detects audio by content instead of using an extension whitelist, reads title/artist tags and falls back to filenames. It checks up to eight files concurrently and reuses metadata for files whose size and modification time are unchanged.
+Set `path` to an existing directory. `mz switch local` switches an already running host. The Local playlist is `all`. Scanning detects audio by content instead of using an extension whitelist, reads title/artist tags and falls back to filenames. It checks up to eight files concurrently and reuses metadata for files whose size and modification time are unchanged. On Unix, non-UTF-8 filenames keep distinct track IDs and are stored losslessly in the index; display titles replace invalid characters.
 
 ### Local settings
 
@@ -259,8 +296,9 @@ Configuration bases follow `XDG_CONFIG_HOME`/`~/.config` on Linux and `APPDATA` 
 
 | Data | Path relative to the appropriate base |
 | --- | --- |
+| Language and player preferences | Config: `mz/settings.json` |
 | YMZ token | Config: `ymz/token` |
-| YouMZ session/proxy | Config: `youmz/session`, `youmz/proxy` |
+| YouMZ session/proxy | Config: `youmz/session`, `youmz/proxy`, `youmz/browser` |
 | Local settings | Config: `mz-local/settings.json` |
 | Icecast stations/settings | Config: `mz-icecast/settings.json` |
 | Selected playlist for each provider | Config: `mz/<id>.playlist` |
@@ -302,7 +340,7 @@ cargo build --workspace --release --locked
 ./install.sh
 ```
 
-`install.sh` builds and installs the four official providers beside `mz`; `MUSICZERO_PREFIX` defaults to `~/.local`. `bootstrap.sh` clones a temporary checkout and invokes this installer; `MUSICZERO_REPO` and `MUSICZERO_REF` override its repository/ref.
+`install.sh` builds and installs the four official providers beside `mz`; `MUSICZERO_PREFIX` defaults to `~/.local`, and `CARGO_TARGET_DIR` is respected. `bootstrap.sh` clones a temporary checkout and invokes this installer; `MUSICZERO_REPO` and `MUSICZERO_REF` override its repository/ref.
 
 The Windows CI build disables the default tray feature; the same flag is useful for a Linux build without a tray:
 
@@ -331,11 +369,25 @@ Linux integration smoke tests require FFmpeg/ffprobe with `libopenmpt` and OpenS
 
 ```sh
 cargo build --workspace --locked
+python3 -m unittest discover -s tests -p 'test_*.py'
 python3 tests/smoke_modules.py
 python3 tests/smoke_https.py
+python3 tests/smoke_seek.py
+python3 tests/smoke_wave.py
+python3 tests/smoke_config.py
 ```
 
 To test already built release binaries, set `MZ_TEST_PROFILE=release` on those Python commands. Tests cover synthetic FLAC and legacy formats, content detection, tags, authenticated live playback and provider switching; a successful build does not prove real account login or every decoder format.
+
+Account integration checks are opt-in and require saved MusicZero credentials (or `YM_TOKEN`/`YOUMZ_SESSION`), network access and `yt-dlp`. They use temporary copies of app credentials, remove temporary files on exit, and never read browser profiles. `--host` additionally checks actual playback and paused/resumed seeking with ALSA null output; it does not test physical speakers. These checks are not run in CI:
+
+```sh
+python3 tests/check_services.py --host
+# Check one service only
+python3 tests/check_services.py --module youmz --host
+# Check wave continuation beyond the first batch
+python3 tests/check_services.py --module ymz --host --wave-tracks 15
+```
 
 CI builds Linux x64 and Windows x64. Pushes to `main`/`master` publish `build-<run_number>` prereleases after both builds pass; `v*` tags publish versioned releases. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).
 
@@ -368,6 +420,8 @@ A fresh process handles each request. Write **only protocol data to stdout**, di
 | `login` | Optional interactive command with inherited terminal I/O |
 
 `info`, `playlists`, `tracks`, `audio` and `settings` are required. Return tracks in playback order; IDs pass back unchanged. JSON responses are limited to 4 MiB/90 seconds. Finite audio is limited to 512 MiB/180 seconds, including process completion.
+
+For continuous recommendations, the `tracks` response adds `"continuous":true`. Subsequent requests use `tracks <playlist> <after>`, where `after` is the last finished or skipped track ID. The host removes batch overlaps and remembers the last 256 IDs; ordinary playlists keep their existing behavior. An optional track field `"feedback":"<batch-context>"` enables `feedback <event> <id> <context> <played_seconds>`, returning `{"ok":true}`. Events `trackStarted`, `trackFinished` and `skip` are sent in order; seconds measure actual listening excluding pauses. The host drains pending events before requesting continuation. YMZ uses this extension for My Wave.
 
 For live audio, a track adds `"stream":true,"buffer_ms":1000`. Its `audio` command must output **raw signed 16-bit little-endian PCM, 48000 Hz, two interleaved channels**. It can remain running indefinitely. The host bounds buffering, starts before EOF, and cancels its reader/provider on switch or exit; startup is limited to 60 seconds and `buffer_ms` is clamped to 250–10000. Seeking and second-stream preloading are disabled. This extension requires the current host.
 

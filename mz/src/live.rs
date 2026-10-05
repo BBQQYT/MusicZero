@@ -52,8 +52,8 @@ impl LiveSource {
     pub async fn open(module: Module, id: String, buffer_ms: u32) -> Result<Self> {
         let chunks = buffer_ms.clamp(250, 10000).div_ceil(20) as usize;
         let (sender, receiver) = mpsc::channel(chunks);
-        let mut child = tokio::process::Command::new(&module.executable)
-            .arg("audio")
+        let mut child = module
+            .command("audio")?
             .arg(id)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

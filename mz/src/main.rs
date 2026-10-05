@@ -1,9 +1,13 @@
+mod config;
+mod feedback;
 mod ipc;
 mod live;
 mod player;
 mod plugin;
+mod seek;
 #[cfg(all(feature = "tray", target_os = "linux"))]
 mod tray;
+mod tui;
 
 use plugin::{discover, Module};
 use serde_json::{json, Value};
@@ -39,6 +43,21 @@ fn show_status(value: &Value) {
     if !title.is_empty() {
         println!("{} — {}", value["artist"].as_str().unwrap_or(""), title);
     }
+    if value["can_seek"].as_bool().unwrap_or(false) {
+        let position = value["position_ms"].as_u64().unwrap_or(0) / 1000;
+        let duration = value["duration_ms"].as_u64().unwrap_or(0) / 1000;
+        if duration > 0 {
+            println!(
+                "Позиция: {}:{:02} / {}:{:02}",
+                position / 60,
+                position % 60,
+                duration / 60,
+                duration % 60
+            );
+        } else {
+            println!("Позиция: {}:{:02}", position / 60, position % 60);
+        }
+    }
     println!("Плейлист: {}", value["playlist"].as_str().unwrap_or("?"));
 }
 
@@ -51,14 +70,37 @@ fn help() {
   mz login <модуль>        Вход в сервис\n\
   mz status               Текущий трек\n\
   mz play|pause|toggle    Управление воспроизведением\n\
+  mz seek <время>         Позиция: 90, 1:30; смещение: +15, -10\n\
   mz next|stop|quit       Следующий трек, остановка, выход\n\
   mz playlists            Список плейлистов\n\
   mz playlist <id|номер>  Выбрать плейлист\n\
   mz settings [модуль]    Настройки сервиса\n\
+  mz config [модуль]      TUI настроек / Settings TUI (RU / EN)\n\
   mz set [модуль] <ключ> <значение> Изменить настройку\n\n\
 Папки модулей лежат в `modules` рядом с mz.",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn validate_args(args: &[String]) -> Result<()> {
+    let Some(action) = args.first().map(String::as_str) else {
+        return Ok(());
+    };
+    let valid = match action {
+        "set" => matches!(args.len(), 3 | 4),
+        "settings" | "playlist" | "config" | "tui" => matches!(args.len(), 1 | 2),
+        "wave" => matches!(args.len(), 1 | 3),
+        "start" | "switch" | "login" | "seek" => args.len() == 2,
+        "modules" | "status" | "play" | "resume" | "pause" | "toggle" | "pp" | "next" | "skip"
+        | "stop" | "quit" | "playlists" | "help" | "--help" | "-h" | "version" | "--version"
+        | "-V" => args.len() == 1,
+        _ => args.len() == 1,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("Неверные аргументы команды {action}. Выполните `mz help`.").into())
+    }
 }
 
 async fn start(modules: Vec<Module>, id: &str) -> Result<()> {
@@ -80,9 +122,28 @@ async fn start(modules: Vec<Module>, id: &str) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,mz=info"))
-        .init();
+    let preferences = config::Settings::load()?;
+    let log_filter = if preferences.log_filter.is_empty() {
+        "warn,mz=info"
+    } else {
+        &preferences.log_filter
+    };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_filter)).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    validate_args(&args)?;
+    // Help/version must work even when module discovery is unavailable.
+    match args.first().map(String::as_str) {
+        Some("help" | "--help" | "-h") => {
+            help();
+            return Ok(());
+        }
+        Some("version" | "--version" | "-V") => {
+            println!("mz {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("config" | "tui") => return tui::run(args.get(1).map(String::as_str)).await,
+        _ => {}
+    }
     let modules = discover()?;
     match args.first().map(String::as_str) {
         None => {
@@ -92,8 +153,6 @@ async fn main() -> Result<()> {
                 help();
             }
         }
-        Some("help" | "--help" | "-h") => help(),
-        Some("version" | "--version" | "-V") => println!("mz {}", env!("CARGO_PKG_VERSION")),
         Some("modules") => {
             if modules.is_empty() {
                 println!("Модулей нет. Создайте папку modules рядом с mz.");
@@ -122,6 +181,12 @@ async fn main() -> Result<()> {
             )?
             .login()
             .await?;
+        }
+        Some("seek") => {
+            let (value, mode) = seek::SeekRequest::parse(&args[1])?.wire();
+            let response = command("seek", &value, mode).await?;
+            let seconds = response["position_ms"].as_u64().unwrap_or(0) / 1000;
+            println!("Позиция: {}:{:02}", seconds / 60, seconds % 60);
         }
         Some("status") => show_status(&command("status", "", "").await?),
         Some("play" | "resume") => {
@@ -226,4 +291,32 @@ async fn main() -> Result<()> {
         Some(other) => return Err(format!("Неизвестная команда или модуль: {other}").into()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn setting_arguments_cannot_fall_through_to_another_command_form() {
+        let args = |values: &[&str]| values.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for values in [
+            vec!["set"],
+            vec!["set", "path"],
+            vec!["set", "local", "path", "/music", "extra"],
+            vec!["settings", "local", "extra"],
+            vec!["next", "extra"],
+        ] {
+            assert!(validate_args(&args(&values)).is_err());
+        }
+        for values in [
+            vec!["set", "local", "path", "/music"],
+            vec!["set", "path", "/music"],
+            vec!["settings", "local"],
+            vec!["settings"],
+            vec!["local"],
+        ] {
+            assert!(validate_args(&args(&values)).is_ok());
+        }
+    }
 }

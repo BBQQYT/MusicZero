@@ -15,7 +15,6 @@ struct StationTracksResponse {
 pub struct StationResult {
     pub sequence: Vec<TrackEntry>,
     #[serde(rename = "batchId", default)]
-    #[allow(dead_code)]
     pub batch_id: String,
 }
 
@@ -247,19 +246,32 @@ impl YandexClient {
     // Запрос треков станции с автоматическим retry
     pub async fn get_wave_tracks(
         &self,
+        after: Option<&str>,
     ) -> Result<StationResult, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("{}/rotor/station/user:onyourwave/tracks", BASE_URL);
+        self.station_tracks(
+            &format!("{BASE_URL}/rotor/station/user:onyourwave/tracks"),
+            after,
+        )
+        .await
+    }
+
+    async fn station_tracks(
+        &self,
+        url: &str,
+        after: Option<&str>,
+    ) -> Result<StationResult, Box<dyn std::error::Error + Send + Sync>> {
+        if after.is_some_and(|id| !Self::valid_track_id(id)) {
+            return Err("Invalid wave continuation track id".into());
+        }
         let mut retries = 3;
         let mut delay = Duration::from_secs(2);
 
         loop {
-            match self
-                .client
-                .get(&url)
-                .query(&[("settings2", "true")])
-                .send()
-                .await
-            {
+            let mut request = self.client.get(url).query(&[("settings2", "true")]);
+            if let Some(after) = after {
+                request = request.query(&[("queue", after)]);
+            }
+            match request.send().await {
                 Ok(resp) if resp.status().is_success() => {
                     let data = resp.json::<StationTracksResponse>().await?;
                     return Ok(data.result);
@@ -282,26 +294,65 @@ impl YandexClient {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn send_feedback(&self, batch_id: &str, track_id: &str, event_type: &str) {
-        let url = format!("{}/rotor/station/user:onyourwave/feedback", BASE_URL);
-        let payload = [
-            ("type", event_type.to_owned()),
-            ("trackId", track_id.to_owned()),
-            ("timestamp", chrono::Utc::now().timestamp().to_string()),
-        ];
+    pub async fn send_feedback(
+        &self,
+        batch_id: &str,
+        track_id: &str,
+        event_type: &str,
+        played_seconds: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.station_feedback(
+            &format!("{BASE_URL}/rotor/station/user:onyourwave/feedback"),
+            batch_id,
+            track_id,
+            event_type,
+            played_seconds,
+        )
+        .await
+    }
 
-        // Feedback шлется fire-and-forget, не блокируя поток
-        let client = self.client.clone();
-        let batch_id = batch_id.to_owned();
-        tokio::spawn(async move {
-            let _ = client
-                .post(&url)
-                .query(&[("batch-id", batch_id)])
-                .form(&payload)
-                .send()
-                .await;
-        });
+    async fn station_feedback(
+        &self,
+        url: &str,
+        batch_id: &str,
+        track_id: &str,
+        event_type: &str,
+        played_seconds: f64,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !["radioStarted", "trackStarted", "trackFinished", "skip"].contains(&event_type)
+            || batch_id.is_empty()
+            || batch_id.len() > 4096
+            || batch_id.chars().any(char::is_control)
+            || (event_type != "radioStarted" && !Self::valid_track_id(track_id))
+            || !played_seconds.is_finite()
+            || played_seconds < 0.0
+        {
+            return Err("Invalid wave feedback".into());
+        }
+        let mut payload =
+            serde_json::json!({"type": event_type, "timestamp": chrono::Utc::now().timestamp()});
+        if event_type == "radioStarted" {
+            payload["from"] = serde_json::json!("musiczero");
+        } else {
+            payload["trackId"] = serde_json::json!(track_id);
+            if matches!(event_type, "trackFinished" | "skip") {
+                payload["totalPlayedSeconds"] = serde_json::json!(played_seconds);
+            }
+        }
+        let result: serde_json::Value = self
+            .client
+            .post(url)
+            .query(&[("batch-id", batch_id)])
+            .json(&payload)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if result["result"] != "ok" {
+            return Err("Yandex did not accept wave feedback".into());
+        }
+        Ok(())
     }
 
     fn valid_track_id(id: &str) -> bool {
@@ -467,5 +518,83 @@ mod tests {
     #[test]
     fn malformed_token_returns_error() {
         assert!(YandexClient::new("bad\r\ntoken").is_err());
+    }
+    #[tokio::test]
+    async fn wave_continuation_and_feedback_use_the_rotor_wire_format() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for index in 0..3 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let end = loop {
+                    let mut block = [0; 1024];
+                    let count = socket.read(&mut block).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&block[..count]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while bytes.len() < end + length {
+                    let mut block = [0; 1024];
+                    let count = socket.read(&mut block).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&block[..count]);
+                }
+                let body = if index == 1 {
+                    assert!(
+                        headers.starts_with("POST /feedback?batch-id=batch-1 "),
+                        "{headers}"
+                    );
+                    assert!(headers
+                        .to_lowercase()
+                        .contains("content-type: application/json"));
+                    let payload: serde_json::Value = serde_json::from_slice(&bytes[end..]).unwrap();
+                    assert_eq!(payload["type"], "skip");
+                    assert_eq!(payload["trackId"], "50");
+                    assert_eq!(payload["totalPlayedSeconds"], 2.5);
+                    assert!(payload["timestamp"].is_i64());
+                    r#"{"result":"ok"}"#
+                } else {
+                    if index == 0 {
+                        assert!(headers.starts_with("GET /tracks?settings2=true "));
+                    } else {
+                        assert!(headers.starts_with("GET /tracks?settings2=true&queue=50 "));
+                    }
+                    r#"{"result":{"batchId":"batch-1","sequence":[{"track":{"id":"51","title":"Track","artists":[]}}]}}"#
+                };
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let client = YandexClient::new("test").unwrap();
+        let first = client
+            .station_tracks(&format!("{base}/tracks"), None)
+            .await
+            .unwrap();
+        assert_eq!(first.batch_id, "batch-1");
+        client
+            .station_feedback(&format!("{base}/feedback"), "batch-1", "50", "skip", 2.5)
+            .await
+            .unwrap();
+        let next = client
+            .station_tracks(&format!("{base}/tracks"), Some("50"))
+            .await
+            .unwrap();
+        assert_eq!(next.sequence[0].track.as_ref().unwrap().id, "51");
+        server.join().unwrap();
     }
 }

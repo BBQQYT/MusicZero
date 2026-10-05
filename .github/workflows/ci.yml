@@ -22,12 +22,30 @@ jobs:
       - uses: actions/checkout@v4
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Test Linux workspace and installer
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --workspace --locked
+          python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Test Windows workspace
+        if: runner.os == 'Windows'
+        run: cargo test --workspace --no-default-features --locked
       - name: Build Linux binaries
         if: runner.os == 'Linux'
         run: cargo build --workspace --release --locked
+      - name: Test Linux playback and seeking
+        if: runner.os == 'Linux'
+        env:
+          MZ_TEST_PROFILE: release
+        run: |
+          python3 tests/smoke_seek.py
+          python3 tests/smoke_wave.py
+          python3 tests/smoke_config.py
+          python3 tests/smoke_modules.py
+          python3 tests/smoke_https.py
       - name: Build Windows binaries
         if: runner.os == 'Windows'
         run: cargo build --workspace --release --no-default-features --locked

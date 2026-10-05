@@ -48,7 +48,7 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 }
 
 fn find_browser() -> Result<Browser> {
-    if let Some(path) = env::var_os("YOUMZ_BROWSER") {
+    if let Some(path) = crate::config::browser() {
         let path = PathBuf::from(path);
         let browser_path = find_on_path(&path.to_string_lossy())
             .ok_or("YOUMZ_BROWSER не указывает на исполняемый браузер")?;
@@ -348,8 +348,8 @@ pub async fn login(proxy: &Option<String>) -> Result<String> {
     let (mut child, _) = launch(&browser, &profile, false).await?;
     let result = tokio::select! {
         result = async {
-            eprintln!("Войдите в YouTube Music в открывшемся окне браузера.");
-            eprintln!("Когда вход завершён и открылась ваша библиотека, закройте это окно. После этого сессия будет проверена автоматически (Ctrl+C — отмена).");
+            eprintln!("{}", crate::config::text("Войдите в YouTube Music в открывшемся окне браузера.", "Sign in to YouTube Music in the browser window."));
+            eprintln!("{}", crate::config::text("Когда вход завершён и открылась ваша библиотека, закройте это окно. После этого сессия будет проверена автоматически (Ctrl+C — отмена).", "Once signed in and your library is open, close that window. The session will then be verified automatically (Ctrl+C to cancel)."));
             let status = child.wait().await?;
             if !status.success() {
                 return Err(format!("Браузер завершился с ошибкой: {status}").into());

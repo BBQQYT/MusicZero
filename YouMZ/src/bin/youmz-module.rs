@@ -119,11 +119,21 @@ async fn main() -> Result<()> {
     if command == "login" {
         let session = browser_login::login(&cfg.proxy).await?;
         auth::save_session(&session)?;
-        eprintln!("Вход в YouTube Music завершён. Сессия сохранена в конфиге YouMZ.");
+        eprintln!(
+            "{}",
+            config::text(
+                "Вход в YouTube Music завершён. Сессия сохранена в конфиге YouMZ.",
+                "YouTube Music login complete. Session saved in YouMZ configuration."
+            )
+        );
         return Ok(());
     }
     if command == "settings" {
-        return print_json(json!({"settings": {}}));
+        return print_json(config::settings()?);
+    }
+    if command == "set-setting" {
+        config::set(arg(&args, 2, "key")?, arg(&args, 3, "value")?)?;
+        return print_json(config::settings()?);
     }
     let cookie = cfg
         .cookie

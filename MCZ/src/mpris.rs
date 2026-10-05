@@ -62,6 +62,7 @@ pub struct MprisPlayer {
     pub current_art_url: Arc<RwLock<String>>,
     pub current_track_id: Arc<RwLock<String>>,
     pub current_duration_us: Arc<RwLock<i64>>,
+    pub current_can_seek: Arc<RwLock<bool>>,
     pub track_url_prefix: &'static str,
     pub track_path_prefix: &'static str,
 }
@@ -141,7 +142,7 @@ impl MprisPlayer {
 
     #[zbus(property)]
     async fn can_seek(&self) -> bool {
-        *self.current_duration_us.read().await > 0
+        *self.current_can_seek.read().await && !self.sink.empty()
     }
 
     #[zbus(property)]

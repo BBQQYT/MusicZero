@@ -44,6 +44,14 @@ fn open_token_page() -> io::Result<()> {
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
+fn text<'a>(ru: &'a str, en: &'a str) -> &'a str {
+    if std::env::var("MZ_LANGUAGE").as_deref() == Ok("en") {
+        en
+    } else {
+        ru
+    }
+}
+
 fn arg<'a>(args: &'a [String], index: usize, name: &str) -> Result<&'a str> {
     args.get(index)
         .map(String::as_str)
@@ -56,6 +64,22 @@ fn print_json(value: serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+async fn settings() -> Result<serde_json::Value> {
+    let token = config::load_token();
+    let mut value = json!({"settings":{"token":if token.is_ok() { "***" } else { "" },
+        "mood":null,"diversity":null,"language":null}});
+    let wave = async { YandexClient::new(&token?)?.get_wave_settings().await }.await;
+    match wave {
+        Ok(wave) => {
+            value["settings"]["mood"] = json!(wave.mood);
+            value["settings"]["diversity"] = json!(wave.diversity);
+            value["settings"]["language"] = json!(wave.language);
+        }
+        Err(error) => value["warning"] = json!(error.to_string()),
+    }
+    Ok(value)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -64,12 +88,28 @@ async fn main() -> Result<()> {
         "info" => print_json(
             json!({"protocol": 1, "id": "ymz", "name": "Яндекс Музыка", "default_playlist": "wave"}),
         ),
+        "settings" => print_json(settings().await?),
+        "set-setting" if args.get(2).is_some_and(|key| key == "token") => {
+            let token = arg(&args, 3, "token")?.trim();
+            YandexClient::new(token)?.list_playlists().await?;
+            config::save_token(token)?;
+            print_json(settings().await?)
+        }
         "login" => {
             if let Err(error) = open_token_page() {
                 eprintln!("Не удалось открыть браузер: {error}");
             }
-            eprintln!("Получите токен на {TOKEN_URL}");
-            eprint!("Вставьте токен Яндекс Музыки и нажмите Enter: ");
+            eprintln!(
+                "{} {TOKEN_URL}",
+                text("Получите токен на", "Get a token at")
+            );
+            eprint!(
+                "{}",
+                text(
+                    "Вставьте токен Яндекс Музыки и нажмите Enter: ",
+                    "Paste your Yandex Music token and press Enter: "
+                )
+            );
             io::stderr().flush()?;
             let mut token = String::new();
             if io::stdin().read_line(&mut token)? == 0 {
@@ -105,8 +145,20 @@ async fn main() -> Result<()> {
                 }
                 "tracks" => {
                     let selected = arg(&args, 2, "playlist id")?;
+                    let mut feedback = String::new();
                     let entries = if selected == "wave" {
-                        client.get_wave_tracks().await?.sequence
+                        let after = args.get(3).map(String::as_str);
+                        let result = client.get_wave_tracks(after).await?;
+                        feedback = result.batch_id;
+                        if after.is_none() {
+                            if let Err(error) = client
+                                .send_feedback(&feedback, "", "radioStarted", 0.0)
+                                .await
+                            {
+                                log::warn!("Wave radioStarted: {error}");
+                            }
+                        }
+                        result.sequence
                     } else {
                         let kind = selected
                             .strip_prefix("playlist:")
@@ -126,20 +178,25 @@ async fn main() -> Result<()> {
                                 .map(|uri| format!("https://{}", uri.replace("%%", "400x400")))
                                 .unwrap_or_default();
                             json!({"id": track.id, "title": track.title, "artist": artist,
-                            "art_url": art_url, "duration_ms": track.duration_ms.unwrap_or(0)})
+                            "art_url": art_url, "duration_ms": track.duration_ms.unwrap_or(0), "feedback":feedback})
                         })
                         .collect::<Vec<_>>();
-                    print_json(json!({"tracks": tracks}))
+                    print_json(json!({"tracks": tracks, "continuous":selected == "wave"}))
+                }
+                "feedback" => {
+                    let event = arg(&args, 2, "feedback event")?;
+                    let track_id = arg(&args, 3, "track id")?;
+                    let batch_id = arg(&args, 4, "batch id")?;
+                    let played = arg(&args, 5, "played seconds")?.parse::<f64>()?;
+                    client
+                        .send_feedback(batch_id, track_id, event, played)
+                        .await?;
+                    print_json(json!({"ok":true}))
                 }
                 "audio" => {
                     let id = arg(&args, 2, "track id")?;
                     let url = client.get_stream_url(id).await?;
                     client.stream_audio(&url).await
-                }
-                "settings" => {
-                    let wave = client.get_wave_settings().await?;
-                    print_json(json!({"settings": {"mood": wave.mood,
-                        "diversity": wave.diversity, "language": wave.language}}))
                 }
                 "set-setting" => {
                     let key = arg(&args, 2, "setting key")?;
@@ -153,7 +210,7 @@ async fn main() -> Result<()> {
                     }
                     client.set_wave_settings(&wave).await?;
                     print_json(json!({"settings": {"mood": wave.mood,
-                        "diversity": wave.diversity, "language": wave.language}}))
+                        "diversity": wave.diversity, "language": wave.language,"token":"***"}}))
                 }
                 _ => Err(format!("Unknown command: {command}").into()),
             }

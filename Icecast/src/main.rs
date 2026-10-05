@@ -128,6 +128,63 @@ fn visible(settings: &Settings) -> serde_json::Value {
 }
 fn set(settings: &mut Settings, key: &str, value: &str) -> Result<()> {
     match key {
+        "station_add" => {
+            settings.stations.push(serde_json::from_str(value)?);
+        }
+        "station_delete" => {
+            if settings.stations.len() <= 1 {
+                return Err("Keep at least one station".into());
+            }
+            if !settings.stations.iter().any(|s| s.id == value) {
+                return Err("Unknown station".into());
+            }
+            settings.stations.retain(|s| s.id != value);
+            if settings.station == value {
+                settings.station = settings.stations[0].id.clone();
+            }
+        }
+        "station_update" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Update {
+                id: String,
+                key: String,
+                value: String,
+            }
+            let update: Update = serde_json::from_str(value)?;
+            let selected = settings.station.clone();
+            if !settings.stations.iter().any(|s| s.id == update.id) {
+                return Err("Unknown station".into());
+            }
+            if update.key == "id" {
+                settings
+                    .stations
+                    .iter_mut()
+                    .find(|s| s.id == update.id)
+                    .unwrap()
+                    .id = update.value.clone();
+                if settings.station == update.id {
+                    settings.station = update.value;
+                }
+            } else {
+                if ![
+                    "name",
+                    "url",
+                    "server",
+                    "mountpoint",
+                    "username",
+                    "password",
+                ]
+                .contains(&update.key.as_str())
+                {
+                    return Err("Unknown station field".into());
+                }
+                settings.station = update.id;
+                let result = set(settings, &update.key, &update.value);
+                settings.station = selected;
+                result?;
+            }
+        }
         "station" => settings.station = support::text(value, 64)?,
         "stations" => {
             settings.stations = serde_json::from_str(value)?;
