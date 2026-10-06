@@ -284,11 +284,11 @@ def dependencies(ui, module):
     needed = {"local": ["ffmpeg", "ffprobe"], "icecast": ["ffmpeg"],
               "youmz": ["yt-dlp", "ffmpeg"], "ymz": []}[module]
     if is_termux():
-        needed = needed + ["pulseaudio", "pacat"]
+        needed = needed + ["pulseaudio", "pacat", "pactl"]
     missing = [name for name in needed if not shutil.which(name)]
     if not missing:
         return True
-    aliases = {"ffprobe": "ffmpeg", "pacat": "pulseaudio"}
+    aliases = {"ffprobe": "ffmpeg", "pacat": "pulseaudio", "pactl": "pulseaudio"}
     packages = sorted({aliases.get(name, name) for name in missing})
     managers = [("apt-get", ["install", "-y"]), ("dnf", ["install", "-y"]),
                 ("pacman", ["-S", "--needed", "--noconfirm"]),

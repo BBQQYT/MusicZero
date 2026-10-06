@@ -22,6 +22,8 @@ pub use pulse::Output;
 
 #[cfg(any(target_os = "android", feature = "pulse-output"))]
 mod pulse {
+    mod termux;
+
     use super::*;
     use std::io::Write;
     use std::process::{Child, Command, Stdio};
@@ -42,34 +44,32 @@ mod pulse {
         pub fn open() -> Result<Self> {
             // Termux has no Java VM context for CPAL. Use its native PulseAudio
             // client, feeding the same Rodio mixer so seeking/history stay shared.
-            #[cfg(target_os = "android")]
-            {
-                let started = Command::new("pulseaudio")
-                    .args(["--start", "--exit-idle-time=-1"])
-                    .output()
-                    .map_err(|e| {
-                        format!("PulseAudio: {e}. Install it with `pkg install pulseaudio`")
-                    })?;
-                if !started.status.success() {
-                    return Err(format!(
-                        "PulseAudio: {}",
-                        String::from_utf8_lossy(&started.stderr).trim()
-                    )
-                    .into());
-                }
+            let device =
+                if cfg!(target_os = "android") || std::env::var_os("TERMUX_VERSION").is_some() {
+                    termux::prepare()?
+                } else {
+                    None
+                };
+            let mut client = Command::new("pacat");
+            client.args([
+                "--playback",
+                "--raw",
+                "--format=float32le",
+                "--rate=48000",
+                "--channels=2",
+                "--latency-msec=40",
+                "--process-time-msec=10",
+            ]);
+            if let Some(device) = device {
+                client.arg(format!("--device={device}"));
             }
-            let mut child = Command::new("pacat")
-                .args([
-                    "--playback",
-                    "--raw",
-                    "--format=float32le",
-                    "--rate=48000",
-                    "--channels=2",
-                    "--latency-msec=40",
-                    "--process-time-msec=10",
-                    "--client-name=MusicZero",
-                    "--stream-name=MusicZero",
-                ])
+            // Bionic's iconv rejects the empty charset used by pacat's name
+            // options AND its default media-name fallback. A filename supplies
+            // the media name directly; this file is still our stdin pipe.
+            // The context's environment properties do not use locale conversion.
+            let mut child = client
+                .arg("/proc/self/fd/0")
+                .env("PULSE_PROP_OVERRIDE_application.name", "MusicZero")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::inherit())

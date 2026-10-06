@@ -86,7 +86,7 @@ class InstallerTests(unittest.TestCase):
         installed = False
         calls = []
         def which(name):
-            return '/termux/bin/'+name if name == 'pkg' or (installed and name in ('pulseaudio', 'pacat')) else None
+            return '/termux/bin/'+name if name == 'pkg' or (installed and name in ('pulseaudio', 'pacat', 'pactl')) else None
         def run(args):
             nonlocal installed
             calls.append(args)
