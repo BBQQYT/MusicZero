@@ -184,6 +184,10 @@ def main():
             tui.edit('Temporary audio folder', str(audio))
             tui.edit('Modules folder', str(root / 'modules'))
             tui.edit('Log filter', 'warn,mz=info')
+            tui.pick('Show tray icon')
+            tui.pick('No')
+            tui.expect('Show tray icon: No')
+            assert cli('tray').strip() == 'off'
             prefs = json.loads((root / 'config/mz/settings.json').read_text())
             assert prefs['temp_dir'] == str(audio) and prefs['modules_dir'] == str(root / 'modules')
             assert (root / 'config/mz/settings.json').stat().st_mode & 0o777 == 0o600

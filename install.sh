@@ -26,3 +26,7 @@ done
 echo "Установлено в $prefix/bin"
 echo "Запуск: mz modules; mz start <ymz|youmz|local|icecast>"
 echo "Управление: mz toggle, mz next, mz status, mz playlist, mz switch youmz."
+echo "Настройки, трей и автозапуск: mz config"
+if [ "${MUSICZERO_SETUP:-1}" != "0" ] && [ -t 0 ] && [ -t 1 ]; then
+    "$prefix/bin/mz" config
+fi

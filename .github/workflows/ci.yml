@@ -45,6 +45,7 @@ jobs:
           python3 tests/smoke_wave.py
           python3 tests/smoke_history.py
           python3 tests/smoke_config.py
+          python3 tests/smoke_service.py
           python3 tests/smoke_modules.py
           python3 tests/smoke_https.py
       - name: Build Windows binaries

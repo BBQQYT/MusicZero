@@ -327,7 +327,9 @@ def edit_settings(ui, executable, module):
 def configure(ui, executable):
     # Ignore dev module overrides: configure the installation we just created.
     os.environ.pop("MZ_MODULES_DIR", None)
-    native_config = 'mz config' in run_command([executable, 'help'], capture=True)
+    help_text = run_command([executable, 'help'], capture=True)
+    native_config = 'mz config' in help_text
+    desktop_setup = 'mz tray' in help_text and 'mz service' in help_text
     if not native_config:
         print("Этот релиз ещё не содержит `mz config`. Для TUI обновите плеер после публикации новой сборки.",
               flush=True)
@@ -336,12 +338,36 @@ def configure(ui, executable):
                  if any(line.startswith(module + " —") for line in listing.splitlines())]
     labels = {"local": "Local music folder", "icecast": "Icecast radio",
               "ymz": "Yandex Music login", "youmz": "YouTube Music browser login"}
+    if desktop_setup:
+        configure_tray(ui, executable)
+    extra = ["Tray / Трей", "Install service / Установить сервис", "All settings / Все настройки"] if desktop_setup else []
     while True:
-        selected = ui.choose("Configure sources", [labels[m] for m in available] + ["Finish setup"])
-        if selected == len(available):
+        selected = ui.choose("Configure sources", [labels[m] for m in available] + extra + ["Finish setup"])
+        if selected == len(available) + len(extra):
             return
-        module = available[selected]
         try:
+            if selected >= len(available):
+                action = selected - len(available)
+                if action == 0:
+                    configure_tray(ui, executable)
+                elif action == 1:
+                    if not available:
+                        raise RuntimeError("No providers are installed")
+                    index = ui.choose("Service source / Источник для сервиса", [labels[m] for m in available] + ["Back / Назад"])
+                    if index == len(available):
+                        continue
+                    module = available[index]
+                    if not dependencies(ui, module):
+                        continue
+                    run_command([executable, "service", "install", module], capture=True)
+                    ui.notice("Service installed / Сервис установлен", "Autostart at login is enabled.\nАвтозапуск при входе включён.\n" +
+                              "Manage it in mz config → Service / autostart.\nУправление: mz config → Сервис / автозапуск.")
+                    if ui.yes("Start service now? / Запустить сервис сейчас?"):
+                        run_command([executable, "service", "start"], capture=True)
+                else:
+                    run_command([executable, "config"])
+                continue
+            module = available[selected]
             if not dependencies(ui, module):
                 continue
             if module == "local":
@@ -377,6 +403,14 @@ def configure(ui, executable):
         except RuntimeError as error:
             print(str(error), file=sys.stderr, flush=True)
             ui.notice("Setup failed; Enter returns to source menu", str(error))
+
+
+def configure_tray(ui, executable):
+    current = run_command([executable, "tray"], capture=True).strip()
+    chosen = ui.choose("Tray icon / Значок трея", ["Keep current / Сохранить: " + current,
+                                                    "Enable / Включить", "Disable / Выключить"])
+    if chosen:
+        run_command([executable, "tray", "on" if chosen == 1 else "off"], capture=True)
 
 
 def add_to_path(ui, directory):

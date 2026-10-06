@@ -6,6 +6,7 @@ mod live;
 mod player;
 mod plugin;
 mod seek;
+mod service;
 #[cfg(all(feature = "tray", target_os = "linux"))]
 mod tray;
 mod tui;
@@ -80,6 +81,9 @@ fn help() {
   mz playlist <id|номер>  Выбрать плейлист\n\
   mz settings [модуль]    Настройки сервиса\n\
   mz config [модуль]      TUI настроек / Settings TUI (RU / EN)\n\
+  mz tray [on|off]        Значок трея при следующем запуске (Linux)\n\
+  mz service install <модуль> Установить сервис с автозапуском (Linux)\n\
+  mz service start|stop|restart|status|remove Управление сервисом\n\
   mz set [модуль] <ключ> <значение> Изменить настройку\n\n\
 Папки модулей лежат в `modules` рядом с mz.",
         env!("CARGO_PKG_VERSION")
@@ -94,7 +98,13 @@ fn validate_args(args: &[String]) -> Result<()> {
         "set" => matches!(args.len(), 3 | 4),
         "settings" | "playlist" | "config" | "tui" | "history" => matches!(args.len(), 1 | 2),
         "wave" => matches!(args.len(), 1 | 3),
-        "start" | "switch" | "login" | "seek" | "replay" => args.len() == 2,
+        "tray" => matches!(args.len(), 1 | 2),
+        "service" => match args.get(1).map(String::as_str) {
+            Some("install") => args.len() == 3,
+            Some("start" | "stop" | "restart" | "status" | "remove") => args.len() == 2,
+            _ => false,
+        },
+        "start" | "serve" | "switch" | "login" | "seek" | "replay" => args.len() == 2,
         "modules" | "status" | "play" | "resume" | "pause" | "toggle" | "pp" | "next" | "skip"
         | "prev" | "previous" | "stop" | "quit" | "playlists" | "help" | "--help" | "-h"
         | "version" | "--version" | "-V" => args.len() == 1,
@@ -107,20 +117,27 @@ fn validate_args(args: &[String]) -> Result<()> {
     }
 }
 
-async fn start(modules: Vec<Module>, id: &str) -> Result<()> {
+async fn start(modules: Vec<Module>, id: &str, managed: bool) -> Result<()> {
     let index = modules
         .iter()
         .position(|m| m.manifest.id.eq_ignore_ascii_case(id))
         .ok_or_else(|| format!("Модуль {id} не найден"))?;
     modules[index].validate().await?;
     if ipc::call(&json!({"action":"ping"})).await.is_ok() {
+        if managed {
+            return Err(
+                "Плеер уже запущен вручную. Выполните `mz quit`, затем `mz service start`.".into(),
+            );
+        }
         command("switch", &modules[index].manifest.id, "").await?;
         println!("Источник: {}", modules[index].manifest.name);
         return Ok(());
     }
     println!("▶ {}. Ctrl+C для выхода.", modules[index].manifest.name);
     #[cfg(all(feature = "tray", target_os = "linux"))]
-    tray::spawn(modules.clone());
+    if config::Settings::load()?.tray_enabled {
+        tray::spawn(modules.clone());
+    }
     player::run(modules, index).await
 }
 
@@ -146,6 +163,42 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some("config" | "tui") => return tui::run(args.get(1).map(String::as_str)).await,
+        Some("tray") => {
+            if let Some(value) = args.get(1) {
+                if !cfg!(all(feature = "tray", target_os = "linux")) {
+                    return Err("Этот файл mz собран без поддержки трея Linux".into());
+                }
+                let mut settings = preferences.clone();
+                settings.set(
+                    "tray_enabled",
+                    match value.as_str() {
+                        "on" => "true",
+                        "off" => "false",
+                        _ => return Err("Используйте `mz tray on` или `mz tray off`".into()),
+                    },
+                )?;
+                settings.save()?;
+                println!(
+                    "{}",
+                    settings.language.text(
+                        "Настройка трея сохранена; перезапустите плеер.",
+                        "Tray preference saved; restart the player."
+                    )
+                );
+            } else {
+                println!(
+                    "{}",
+                    if preferences.tray_enabled && cfg!(all(feature = "tray", target_os = "linux"))
+                    {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                );
+            }
+            return Ok(());
+        }
+        Some("service") => return service::cli(&args[1..]).await,
         _ => {}
     }
     let modules = discover()?;
@@ -165,10 +218,11 @@ async fn main() -> Result<()> {
                 println!("{} — {}", item.manifest.id, item.manifest.name);
             }
         }
-        Some("start") => {
+        Some("start" | "serve") => {
             start(
                 modules,
                 args.get(1).map(String::as_str).ok_or("Укажите модуль")?,
+                args[0] == "serve",
             )
             .await?
         }
@@ -317,7 +371,7 @@ async fn main() -> Result<()> {
                 .iter()
                 .any(|item| item.manifest.id.eq_ignore_ascii_case(id)) =>
         {
-            start(modules, id).await?
+            start(modules, id, false).await?
         }
         Some(other) => return Err(format!("Неизвестная команда или модуль: {other}").into()),
     }

@@ -49,11 +49,17 @@ pub async fn run(initial: Option<&str>) -> Result<()> {
     let mut settings = Settings::load()?;
     let mut ui = Ui::open(settings.language)?;
     if let Some(id) = initial {
-        let result = async {
-            let modules = plugin::discover()?;
-            module_menu(&mut ui, crate::module(&modules, id)?).await
-        }
-        .await;
+        let result = match id {
+            "--player" => host_menu(&mut ui, &mut settings).await,
+            "--service" => service_menu(&mut ui, &mut settings).await,
+            _ => {
+                async {
+                    let modules = plugin::discover()?;
+                    module_menu(&mut ui, crate::module(&modules, id)?).await
+                }
+                .await
+            }
+        };
         error(&mut ui, result).await?;
     }
     let mut selected = 0;
@@ -76,8 +82,8 @@ pub async fn run(initial: Option<&str>) -> Result<()> {
             Row::new(
                 ui.tr("Плеер и папки", "Player and folders"),
                 ui.tr(
-                    "Папки модулей и временных файлов, журналирование.",
-                    "Module and temporary folders, logging.",
+                    "Трей, папки модулей и временных файлов, журналирование.",
+                    "Tray, module and temporary folders, logging.",
                 ),
             ),
         ];
@@ -90,6 +96,17 @@ pub async fn run(initial: Option<&str>) -> Result<()> {
                 ),
             )
         }));
+        let service_index = crate::service::supported().then_some(rows.len());
+        if service_index.is_some() {
+            rows.push(Row::new(
+                ui.tr("Сервис / автозапуск", "Service / autostart"),
+                ui.tr(
+                    "Установить пользовательский сервис, выбрать источник и управлять запуском.",
+                    "Install a user service, choose its source and control startup.",
+                ),
+            ));
+        }
+        let refresh_index = rows.len();
         rows.push(Row::new(
             ui.tr("Обновить список модулей", "Refresh modules"),
             discovery_error.unwrap_or_else(|| {
@@ -115,7 +132,8 @@ pub async fn run(initial: Option<&str>) -> Result<()> {
             0 => language(&mut ui, &mut settings).await,
             1 => host_menu(&mut ui, &mut settings).await,
             i if i < modules.len() + 2 => module_menu(&mut ui, &modules[i - 2]).await,
-            i if i == modules.len() + 2 => Ok(()),
+            i if Some(i) == service_index => service_menu(&mut ui, &mut settings).await,
+            i if i == refresh_index => Ok(()),
             _ => break,
         };
         error(&mut ui, result).await?;
@@ -146,7 +164,10 @@ async fn language(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
     Ok(())
 }
 async fn host_menu(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
-    let keys = ["modules_dir", "log_filter", "temp_dir"];
+    let mut keys = vec!["modules_dir", "log_filter", "temp_dir"];
+    if cfg!(all(feature = "tray", target_os = "linux")) {
+        keys.push("tray_enabled");
+    }
     let mut selected = 0;
     loop {
         let value = serde_json::to_value(&*settings)?;
@@ -218,6 +239,140 @@ async fn host_menu(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
                 updated.set(key, &value)?;
                 updated.save()?;
                 *settings = updated;
+            }
+            Ok(())
+        }
+        .await;
+        error(ui, result).await?;
+    }
+}
+
+async fn service_menu(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
+    if !crate::service::supported() {
+        return Err("Сервис доступен в Linux с systemd --user".into());
+    }
+    let mut selected = 0;
+    loop {
+        let state = match crate::service::status().await {
+            Ok(value) => {
+                if !value["installed"].as_bool().unwrap_or(false) {
+                    ui.tr("не установлен", "not installed").to_owned()
+                } else {
+                    format!(
+                        "{}; {}",
+                        if value["active"].as_bool().unwrap_or(false) {
+                            ui.tr("работает", "running")
+                        } else {
+                            ui.tr("остановлен", "stopped")
+                        },
+                        if value["enabled"].as_bool().unwrap_or(false) {
+                            ui.tr("автозапуск включён", "autostart enabled")
+                        } else {
+                            ui.tr("автозапуск выключен", "autostart disabled")
+                        }
+                    )
+                }
+            }
+            Err(error) => error.to_string(),
+        };
+        let rows = [
+            Row::new(ui.tr("Установить сервис", "Install service"), ui.tr("Выберите модуль для автозапуска при входе в систему. Без sudo; запуск сейчас — отдельно.", "Choose a provider to start at login. No sudo; starting now is optional.")),
+            Row::new(ui.tr("Запустить сервис", "Start service"), ""),
+            Row::new(ui.tr("Остановить сервис", "Stop service"), ""),
+            Row::new(ui.tr("Перезапустить сервис", "Restart service"), ui.tr("Применить настройки трея и источник сервиса.", "Apply tray preferences and the service source.")),
+            Row::new(ui.tr("Удалить сервис", "Remove service"), ui.tr("Остановить и отключить автозапуск. Настройки музыки сохраняются.", "Stop and disable autostart. Music settings are retained.")),
+            Row::new(format!("{}: {state}", ui.tr("Статус", "Status")), format!("{}: {}", ui.tr("Источник", "Source"), settings.service_module)),
+        ];
+        let Some(index) = ui
+            .choose(
+                ui.tr("Сервис / автозапуск", "Service / autostart"),
+                &rows,
+                &mut selected,
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+        let result = async {
+            match index {
+                0 => {
+                    let modules = plugin::discover()?;
+                    if modules.is_empty() {
+                        return Err("Модули не найдены".into());
+                    }
+                    let rows: Vec<_> = modules
+                        .iter()
+                        .map(|module| Row::new(module_name(ui.lang, module), &module.manifest.id))
+                        .collect();
+                    let mut selected = modules
+                        .iter()
+                        .position(|module| module.manifest.id == settings.service_module)
+                        .unwrap_or(0);
+                    let Some(index) = ui
+                        .choose(
+                            ui.tr("Источник для сервиса", "Service source"),
+                            &rows,
+                            &mut selected,
+                        )
+                        .await?
+                    else {
+                        return Ok(());
+                    };
+                    ui.wait(crate::service::install(&modules[index], settings))
+                        .await?;
+                    let rows = [
+                        Row::new(ui.tr("Позже", "Later"), ""),
+                        Row::new(ui.tr("Запустить сейчас", "Start now"), ""),
+                    ];
+                    if ui
+                        .choose(
+                            ui.tr(
+                                "Сервис установлен; автозапуск включён",
+                                "Service installed; autostart enabled",
+                            ),
+                            &rows,
+                            &mut 0,
+                        )
+                        .await?
+                        == Some(1)
+                    {
+                        ui.wait(crate::service::action("start")).await?;
+                    }
+                }
+                1..=3 => {
+                    ui.wait(crate::service::action(
+                        ["start", "stop", "restart"][index - 1],
+                    ))
+                    .await?;
+                }
+                4 => {
+                    let rows = [
+                        Row::new(ui.tr("Отмена", "Cancel"), ""),
+                        Row::new(ui.tr("Удалить", "Remove"), ""),
+                    ];
+                    if ui
+                        .choose(
+                            ui.tr(
+                                "Удалить сервис и отключить автозапуск?",
+                                "Remove service and disable autostart?",
+                            ),
+                            &rows,
+                            &mut 0,
+                        )
+                        .await?
+                        == Some(1)
+                    {
+                        ui.wait(crate::service::action("remove")).await?;
+                    }
+                }
+                _ => {
+                    let value = ui.wait(crate::service::status()).await?;
+                    ui.message(
+                        ui.tr("Статус сервиса", "Service status"),
+                        &serde_json::to_string_pretty(&value)?,
+                    )
+                    .await?;
+                }
             }
             Ok(())
         }

@@ -266,6 +266,53 @@ class InstallerTests(unittest.TestCase):
             installer.edit_settings(None, self.destination / 'mz', 'ymz')
         self.assertEqual(calls, [['help'], ['config', 'ymz']])
 
+    def test_tray_selection_preserves_current_setting_or_changes_it_explicitly(self):
+        for choice, change in [(0, None), (1, 'on'), (2, 'off')]:
+            ui = type('UI', (), {'choose': lambda self, title, options: choice})()
+            calls = []
+            def command(args, capture=False):
+                calls.append(args[1:])
+                return 'off\n'
+            with patch.object(installer, 'run_command', side_effect=command):
+                installer.configure_tray(ui, self.destination / 'mz')
+            self.assertEqual(calls, [['tray']] + ([['tray', change]] if change else []))
+
+    def test_setup_exposes_service_button_and_does_not_start_without_selection(self):
+        choices = iter([0, 2, 0, 4])  # keep tray, install service, source, finish
+        class UI:
+            def choose(self, title, options):
+                return next(choices)
+            def notice(self, title, text):
+                pass
+            def yes(self, title):
+                return False
+        calls = []
+        def command(args, capture=False):
+            calls.append(args[1:])
+            return {'help': 'mz config mz tray mz service', 'modules': 'ymz — Yandex', 'tray': 'on'}.get(args[1], '')
+        with patch.object(installer, 'run_command', side_effect=command):
+            installer.configure(UI(), self.destination / 'mz')
+        self.assertIn(['service', 'install', 'ymz'], calls)
+        self.assertNotIn(['service', 'start'], calls)
+
+    def test_setup_service_start_is_an_explicit_choice(self):
+        choices = iter([2, 2, 0, 4])  # disable tray, install, choose source, finish
+        class UI:
+            def choose(self, title, options):
+                return next(choices)
+            def notice(self, title, text):
+                pass
+            def yes(self, title):
+                return True
+        calls = []
+        def command(args, capture=False):
+            calls.append(args[1:])
+            return {'help': 'mz config mz tray mz service', 'modules': 'ymz — Yandex', 'tray': 'on'}.get(args[1], '')
+        with patch.object(installer, 'run_command', side_effect=command):
+            installer.configure(UI(), self.destination / 'mz')
+        self.assertIn(['tray', 'off'], calls)
+        self.assertIn(['service', 'start'], calls)
+
     def test_invalid_settings_schema_returns_a_readable_error(self):
         with patch.object(installer, 'run_command', side_effect=['old help', '[]']):
             with self.assertRaisesRegex(RuntimeError, 'JSON object'):

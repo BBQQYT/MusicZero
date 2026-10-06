@@ -147,6 +147,26 @@ mz replay 3      # play entry 3; next returns to the interrupted track
 mz history ymz   # inspect saved history even while the player is stopped
 ```
 
+## Linux tray and user service
+
+The installer offers “Keep current”, “Enable” and “Disable” for the tray, and an “Install service / Установить сервис” button. Choose a provider for login autostart; starting immediately is a separate choice. Non-interactive installation preserves preferences and does not install a service. These choices require a release with `mz tray` and `mz service`; older binaries keep their existing setup flow.
+
+In `mz config`, “Player and folders” contains “Show tray icon”. “Service / autostart” offers installation, status, start, stop, restart and removal. Configure the selected provider and log in before starting its service. Both menus support Russian and English.
+
+```sh
+mz tray off                    # no tray on subsequent starts; on enables it
+mz service install ymz         # select YMZ and enable login autostart
+mz service start
+mz service status
+mz service restart             # apply tray preferences or an updated unit
+mz service stop
+mz service remove              # stop and disable autostart; retain music settings
+```
+
+The unit is `<config-base>/systemd/user/musiczero.service` and uses `systemctl --user`, without sudo. Installation enables autostart without starting playback. The service runs the installed binary with the selected provider and saved playlist. Paths to configuration/modules and runtime tools are retained; account tokens and sessions are not written into the unit. Reinstalling updates the unit for the next start; restart a running service explicitly to apply changes. Quit a manually running player before starting the service. Logs: `journalctl --user -u musiczero.service`. Linux without a systemd user manager can run the player manually. Windows has no systemd menu; Windows and Linux builds without the tray feature cannot enable the tray.
+
+`install.sh` also opens the settings menu when stdin/stdout are terminals; `MUSICZERO_SETUP=0` skips it. Tray preference and the last service source are saved as `tray_enabled` and `service_module` in `mz/settings.json`.
+
 ## Settings menu
 
 ```sh
@@ -389,6 +409,7 @@ python3 tests/smoke_seek.py
 python3 tests/smoke_wave.py
 python3 tests/smoke_history.py
 python3 tests/smoke_config.py
+python3 tests/smoke_service.py
 ```
 
 To test already built release binaries, set `MZ_TEST_PROFILE=release` on those Python commands. Tests cover synthetic FLAC and legacy formats, content detection, tags, authenticated live playback and provider switching; a successful build does not prove real account login or every decoder format.

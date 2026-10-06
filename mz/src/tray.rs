@@ -6,6 +6,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Clone)]
 struct MusicTray {
     modules: Vec<(String, String)>,
     selected: usize,
@@ -187,11 +188,18 @@ pub fn spawn(modules: Vec<Module>) {
             can_previous: false,
             history: Vec::new(),
         };
-        let handle = match tray.spawn().await {
-            Ok(handle) => Arc::new(handle),
-            Err(error) => {
-                log::warn!("Трей: {error}");
-                return;
+        let mut warned = false;
+        let handle = loop {
+            match tray.clone().spawn().await {
+                Ok(handle) => break Arc::new(handle),
+                Err(error) => {
+                    if !warned {
+                        log::warn!("Трей: {error}; повторное подключение через 5 секунд");
+                        warned = true;
+                    }
+                    // A user service can start before the desktop's tray watcher.
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
             }
         };
         let mut listed_for = (String::new(), String::new());
