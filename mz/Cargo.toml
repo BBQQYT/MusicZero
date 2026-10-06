@@ -7,12 +7,13 @@ description = "MusicZero host and shared audio engine"
 [features]
 default = ["tray"]
 tray = ["dep:ksni"]
+pulse-output = []
 
 [dependencies]
 mcz = { path = "../MCZ" }
 tokio = { version = "1", features = ["full"] }
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }
-rodio = { version = "0.21.1", default-features = false, features = ["playback", "symphonia-all"] }
+rodio = { version = "0.21.1", default-features = false, features = ["symphonia-all"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
@@ -23,6 +24,9 @@ crossterm = { version = "0.29", default-features = false, features = ["events", 
 unicode-width = "0.2"
 mz-module-support = { version = "0.1.0", path = "../ModuleSupport" }
 url = "2"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rodio = { version = "0.21.1", default-features = false, features = ["playback"] }
 
 [[bin]]
 name = "mz"

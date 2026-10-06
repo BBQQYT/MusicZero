@@ -29,6 +29,94 @@ class InstallerTests(unittest.TestCase):
         self.destination = self.root / 'bin'
         self.destination.mkdir()
 
+    def test_selects_linux_and_android_archives_without_crossing_abis(self):
+        for termux, machine, expected in [
+            (False, 'x86_64', 'musiczero-linux-x64.tar.gz'),
+            (False, 'aarch64', 'musiczero-linux-arm64-alpha.tar.gz'),
+            (False, 'arm64', 'musiczero-linux-arm64-alpha.tar.gz'),
+            (True, 'aarch64', 'musiczero-termux-arm64-alpha.tar.gz')]:
+            with self.subTest(termux=termux, machine=machine), \
+                 patch.object(installer, 'is_termux', return_value=termux), \
+                 patch.object(installer.sys, 'platform', 'linux'), \
+                 patch.object(installer.platform, 'machine', return_value=machine):
+                self.assertEqual(installer.platform_asset(), expected)
+        with patch.object(installer, 'is_termux', return_value=True), \
+             patch.object(installer.platform, 'machine', return_value='armv7l'):
+            with self.assertRaisesRegex(RuntimeError, 'ARM64'):
+                installer.platform_asset()
+
+    def test_termux_detection_ignores_inherited_prefix_in_proot(self):
+        with patch.dict(os.environ, {'PREFIX': '/data/data/com.termux/files/usr'}), \
+             patch.object(installer.sys, 'platform', 'linux'):
+            with patch.object(installer.sys, 'executable', '/usr/bin/python3'):
+                self.assertFalse(installer.is_termux())
+            with patch.object(installer.sys, 'executable', '/data/data/com.termux/files/usr/bin/python3'):
+                self.assertTrue(installer.is_termux())
+
+    def test_release_selection_skips_other_architectures_and_drafts(self):
+        wanted = 'musiczero-termux-arm64-alpha.tar.gz'
+        def release(tag, name, draft=False):
+            return dict(tag_name=tag, draft=draft, assets=[dict(name=name, state='uploaded',
+                        browser_download_url='https://example.org/'+tag, digest='sha256:'+'1'*64)])
+        releases = [release('draft', wanted, True), release('new-x64', installer.ASSET),
+                    release('android', wanted)]
+        with patch.object(installer, 'open_url', return_value=io.StringIO(json.dumps(releases))), \
+             patch.dict(os.environ, {'MUSICZERO_TAG': ''}):
+            self.assertEqual(installer.release_asset(wanted), ('android', 'https://example.org/android', '1'*64))
+        with patch.object(installer, 'open_url', return_value=io.StringIO(json.dumps(releases[:2]))), \
+             patch.dict(os.environ, {'MUSICZERO_TAG': ''}):
+            with self.assertRaisesRegex(RuntimeError, wanted):
+                installer.release_asset(wanted)
+
+    def test_termux_install_defaults_to_prefix_bin(self):
+        archive = self.archive()
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        args = type('Args', (), {'setup_only': False})()
+        with patch.dict(os.environ, {'PREFIX': str(self.root), 'MUSICZERO_PREFIX': ''}), \
+             patch.object(installer, 'is_termux', return_value=True), \
+             patch.object(installer.platform, 'machine', return_value='aarch64'), \
+             patch.object(installer, 'release_asset', return_value=('alpha', 'unused', digest)) as release, \
+             patch.object(installer, 'open_url', side_effect=lambda url: archive.open('rb')):
+            installer.perform_install(args, None)
+        release.assert_called_once_with('musiczero-termux-arm64-alpha.tar.gz')
+        self.assertTrue((self.destination / 'mz').exists())
+
+    def test_termux_dependencies_use_pkg_without_sudo(self):
+        ui = type('UI', (), {'yes': lambda self, title: True})()
+        installed = False
+        calls = []
+        def which(name):
+            return '/termux/bin/'+name if name == 'pkg' or (installed and name in ('pulseaudio', 'pacat')) else None
+        def run(args):
+            nonlocal installed
+            calls.append(args)
+            if 'install' in args:
+                installed = True
+        with patch.object(installer, 'is_termux', return_value=True), \
+             patch.object(installer.shutil, 'which', side_effect=which), \
+             patch.object(installer, 'run_command', side_effect=run):
+            self.assertTrue(installer.dependencies(ui, 'ymz'))
+        self.assertEqual(calls, [['pkg', 'update'], ['pkg', 'install', '-y', 'pulseaudio']])
+
+    def test_termux_setup_keeps_config_and_hides_desktop_controls(self):
+        choices = iter([1, 2])
+        class UI:
+            def choose(self, title, options):
+                self.assertions(options)
+                return next(choices)
+            def assertions(self, options):
+                assert 'All settings / Все настройки' in options
+                assert not any('Tray' in option or 'service' in option for option in options)
+        calls = []
+        def command(args, capture=False):
+            calls.append(args[1:])
+            return {'help': 'mz config mz tray mz service', 'modules': 'ymz — Yandex'}.get(args[1], '')
+        with patch.object(installer, 'is_termux', return_value=True), \
+             patch.object(installer, 'run_command', side_effect=command):
+            installer.configure(UI(), self.destination / 'mz')
+        self.assertIn(['config'], calls)
+        self.assertFalse(any(call[0] in ('tray', 'service') for call in calls))
+
     def archive(self, *, missing=None, symlink=None, duplicate=False, legacy=False):
         path = self.root / 'release.tar.gz'
         with tarfile.open(path, 'w:gz') as bundle:

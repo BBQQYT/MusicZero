@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the newest published MusicZero Linux release for the current user."""
+"""Install MusicZero for Linux x64/ARM64 or Android ARM64 (Termux alpha)."""
 
 import argparse
 import contextlib
@@ -22,6 +22,29 @@ from pathlib import Path
 
 API = "https://api.github.com/repos/BBQQYT/MusicZero/releases"
 ASSET = "musiczero-linux-x64.tar.gz"
+
+
+def is_termux():
+    # An inherited PREFIX inside proot must not select Android binaries.
+    prefix = os.environ.get("PREFIX", "").rstrip("/")
+    return sys.platform == "android" or ("/files/usr" in prefix and
+                                        os.path.realpath(sys.executable).startswith(prefix + "/"))
+
+
+def platform_asset():
+    machine = platform.machine().lower()
+    if is_termux():
+        if machine in ("aarch64", "arm64"):
+            return "musiczero-termux-arm64-alpha.tar.gz"
+        raise RuntimeError("Termux alpha поддерживает только ARM64 (aarch64)")
+    if sys.platform == "linux":
+        if machine in ("x86_64", "amd64"):
+            return ASSET
+        if machine in ("aarch64", "arm64"):
+            return "musiczero-linux-arm64-alpha.tar.gz"
+    raise RuntimeError("Готовые архивы: Linux x86_64/ARM64 и Termux ARM64")
+
+
 FILES = (
     ("musiczero/modules/ymz/module.json", "modules/ymz/module.json", 0o644),
     ("musiczero/modules/ymz/ymz-module", "modules/ymz/ymz-module", 0o755),
@@ -48,7 +71,8 @@ def open_url(url, *, api=False):
     return urllib.request.urlopen(request, timeout=30)
 
 
-def release_asset():
+def release_asset(asset=None):
+    wanted = asset or platform_asset()
     tag = os.environ.get("MUSICZERO_TAG")
     url = f"{API}/tags/{urllib.parse.quote(tag, safe='')}" if tag else f"{API}?per_page=30"
     with open_url(url, api=True) as response:
@@ -58,12 +82,12 @@ def release_asset():
         if release.get("draft"):
             continue
         for asset in release.get("assets", []):
-            if asset.get("name") == ASSET and asset.get("state") == "uploaded":
+            if asset.get("name") == wanted and asset.get("state") == "uploaded":
                 digest = asset.get("digest") or ""
                 if not digest.startswith("sha256:"):
                     raise RuntimeError("GitHub не сообщил SHA-256 архива")
                 return release["tag_name"], asset["browser_download_url"], digest[7:]
-    raise RuntimeError("Linux архив не найден среди опубликованных релизов")
+    raise RuntimeError(f"Архив {wanted} не найден среди опубликованных релизов")
 
 
 def install(archive, destination):
@@ -259,21 +283,26 @@ def run_command(args, *, capture=False):
 def dependencies(ui, module):
     needed = {"local": ["ffmpeg", "ffprobe"], "icecast": ["ffmpeg"],
               "youmz": ["yt-dlp", "ffmpeg"], "ymz": []}[module]
+    if is_termux():
+        needed = needed + ["pulseaudio", "pacat"]
     missing = [name for name in needed if not shutil.which(name)]
     if not missing:
         return True
-    packages = sorted({"ffmpeg" if name == "ffprobe" else name for name in missing})
+    aliases = {"ffprobe": "ffmpeg", "pacat": "pulseaudio"}
+    packages = sorted({aliases.get(name, name) for name in missing})
     managers = [("apt-get", ["install", "-y"]), ("dnf", ["install", "-y"]),
                 ("pacman", ["-S", "--needed", "--noconfirm"]),
                 ("zypper", ["--non-interactive", "install"])]
+    if is_termux():
+        managers = [("pkg", ["install", "-y"])]
     manager = next(((name, flags) for name, flags in managers if shutil.which(name)), None)
     print("Missing dependencies: " + ", ".join(missing), flush=True)
     if manager and ui.yes("Install " + ", ".join(packages) + " with " + manager[0] + "?"):
         name, flags = manager
-        sudo = [] if os.geteuid() == 0 else ["sudo"]
+        sudo = [] if is_termux() or os.geteuid() == 0 else ["sudo"]
         if sudo and not shutil.which("sudo"):
             raise RuntimeError("sudo is missing; install dependencies with your package manager")
-        if name == "apt-get":
+        if name in ("apt-get", "pkg"):
             run_command(sudo + [name, "update"])
         run_command(sudo + [name] + flags + packages)
         missing = [name for name in needed if not shutil.which(name)]
@@ -329,7 +358,7 @@ def configure(ui, executable):
     os.environ.pop("MZ_MODULES_DIR", None)
     help_text = run_command([executable, 'help'], capture=True)
     native_config = 'mz config' in help_text
-    desktop_setup = 'mz tray' in help_text and 'mz service' in help_text
+    desktop_setup = not is_termux() and 'mz tray' in help_text and 'mz service' in help_text
     if not native_config:
         print("Этот релиз ещё не содержит `mz config`. Для TUI обновите плеер после публикации новой сборки.",
               flush=True)
@@ -338,19 +367,23 @@ def configure(ui, executable):
                  if any(line.startswith(module + " —") for line in listing.splitlines())]
     labels = {"local": "Local music folder", "icecast": "Icecast radio",
               "ymz": "Yandex Music login", "youmz": "YouTube Music browser login"}
+    if is_termux():
+        labels['youmz'] = "YouTube Music session / Сессия YouTube"
     if desktop_setup:
         configure_tray(ui, executable)
-    extra = ["Tray / Трей", "Install service / Установить сервис", "All settings / Все настройки"] if desktop_setup else []
+    extra = [("tray", "Tray / Трей"), ("service", "Install service / Установить сервис")] if desktop_setup else []
+    if native_config:
+        extra += [("config", "All settings / Все настройки")]
     while True:
-        selected = ui.choose("Configure sources", [labels[m] for m in available] + extra + ["Finish setup"])
+        selected = ui.choose("Configure sources", [labels[m] for m in available] + [label for _, label in extra] + ["Finish setup"])
         if selected == len(available) + len(extra):
             return
         try:
             if selected >= len(available):
-                action = selected - len(available)
-                if action == 0:
+                action = extra[selected - len(available)][0]
+                if action == "tray":
                     configure_tray(ui, executable)
-                elif action == 1:
+                elif action == "service":
                     if not available:
                         raise RuntimeError("No providers are installed")
                     index = ui.choose("Service source / Источник для сервиса", [labels[m] for m in available] + ["Back / Назад"])
@@ -390,6 +423,10 @@ def configure(ui, executable):
                     for key in ("username", "password"):
                         value = ui.text("Station " + key, secret=key == "password")
                         run_command([executable, "set", module, key, value], capture=True)
+            elif module == "youmz" and is_termux():
+                ui.notice("YouTube Music / Termux alpha", "Browser login requires desktop Firefox/Chromium.\nВход через браузер требует настольного Firefox/Chromium.\n" +
+                          "Use the manual session field in mz config youmz.\nВведите сессию вручную в mz config youmz.")
+                edit_settings(ui, executable, module)
             else:
                 print("Follow the login instructions below.", flush=True)
                 run_command([executable, "login", module])
@@ -451,9 +488,9 @@ def main():
 
 
 def perform_install(args, ui):
-    if sys.platform != "linux" or platform.machine().lower() not in ("x86_64", "amd64"):
-        raise RuntimeError("Сейчас готовый Linux архив доступен только для x86_64")
-    prefix = Path(os.environ.get("MUSICZERO_PREFIX") or "~/.local").expanduser().resolve()
+    asset = platform_asset()
+    default_prefix = os.environ.get("PREFIX") if is_termux() else "~/.local"
+    prefix = Path(os.environ.get("MUSICZERO_PREFIX") or default_prefix or "~/.local").expanduser().resolve()
     if ui and not args.setup_only:
         value = ui.text("Installation prefix", str(prefix)).strip()
         if not value:
@@ -465,10 +502,10 @@ def perform_install(args, ui):
         add_to_path(ui, prefix / "bin")
         configure(ui, prefix / "bin/mz")
         return
-    tag, url, expected_hash = release_asset()
-    print(f"MusicZero {tag}: загрузка {ASSET}...", flush=True)
+    tag, url, expected_hash = release_asset(asset)
+    print(f"MusicZero {tag}: загрузка {asset}...", flush=True)
     with tempfile.TemporaryDirectory() as temporary_dir:
-        archive = Path(temporary_dir) / ASSET
+        archive = Path(temporary_dir) / asset
         checksum = hashlib.sha256()
         with open_url(url) as response, archive.open("wb") as output:
             while block := response.read(1024 * 1024):

@@ -6,7 +6,7 @@ MusicZero — один музыкальный плеер со сменными �
 
 ## Установка
 
-### Linux x86_64
+### Linux x86_64 / ARM64 alpha
 
 Нужны `curl` и Python 3.8+:
 
@@ -14,7 +14,7 @@ MusicZero — один музыкальный плеер со сменными �
 curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
 ```
 
-Установщик выбирает самый новый опубликованный релиз с Linux-архивом, включая автоматические предварительные сборки, проверяет SHA-256 от GitHub и устанавливает файлы в `~/.local/bin`. Повторный запуск обновляет программу. Пользовательские настройки и папки собственных модулей сохраняются. Старые архивы могут содержать только YMZ и YouMZ.
+Установщик определяет систему и архитектуру, выбирает самый новый опубликованный подходящий архив, включая автоматические предварительные сборки, проверяет SHA-256 от GitHub и устанавливает файлы в `~/.local/bin`. Для ARM64-ноутбуков используется `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux с glibc 2.39+); трей, MPRIS и пользовательский сервис работают как на x64. Повторный запуск обновляет программу. Пользовательские настройки и папки собственных модулей сохраняются. Старые архивы могут содержать только YMZ и YouMZ.
 
 Установщик автоматически открывает TUI-мастер, в том числе при запуске через `curl`. Управление: стрелки вверх/вниз (или j/k), Enter — подтвердить, Esc — отменить. Можно выбрать каталог, добавить `mz` в PATH Bash/Zsh/Fish, установить недостающие пакеты через apt/dnf/pacman/zypper (sudo может запросить пароль), настроить Local/Icecast и войти в Яндекс/YouTube Music. Дополнительное меню содержит пути FFmpeg, SoundFont, прокси/TLS/буфер радио и предпочтения «Моей волны». Для входа в YouTube нужны Firefox или Chromium/Chrome и графическая сессия. Установка пакетов и изменение настроек оболочки добровольны; неудачную настройку можно повторить без переустановки.
 
@@ -42,7 +42,25 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 Замените `build-123` существующим тегом релиза. После обновления перезапустите работающий плеер, чтобы он использовал новые файлы.
 
+### Termux ARM64 alpha
+
+Нативная сборка для Android 7+ (API 24), только ARM64. Выполните в Termux:
+
+```sh
+pkg install python curl pulseaudio ffmpeg
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+mz config
+```
+
+Установщик выбирает `musiczero-termux-arm64-alpha.tar.gz` и по умолчанию устанавливает в `$PREFIX/bin`, который уже находится в PATH Termux. Сборка использует Bionic; обычный Linux/glibc-архив напрямую в Termux не запускается. Оба архива содержат все четыре модуля. Звук идёт через PulseAudio/`pacat` Termux; при начале воспроизведения сервер запускается автоматически. Пауза, перемотка, история пяти треков и TUI на русском/английском используют общий движок. В Android нет трея, MPRIS и systemd.
+
+Для доступа к общей папке музыки выполните `termux-setup-storage` и выберите каталог в `mz config local`. YMZ открывает страницу токена через `termux-open-url`. Для YouMZ нужен `pkg install yt-dlp`; вход через браузер требует настольного Firefox/Chromium, поэтому в Termux используйте ручное поле сессии в `mz config youmz`. Android может приостановить воспроизведение в фоне; держите Termux запущенным и при необходимости измените ограничения батареи приложения. Это alpha: CI проверяет воспроизведение на Linux ARM64, кросс-сборку Android и аудиодрайвер PulseAudio, но звук на физическом Android-устройстве ещё не проверен.
+
+Сборка на устройстве: `pkg install rust clang make pkg-config git`, затем клонируйте репозиторий и выполните `./install.sh` (libclang входит в пакет `clang`). Для кросс-сборки на Linux x64: установите `libclang-dev`, выполните `rustup target add aarch64-linux-android`, задайте `ANDROID_NDK_HOME` с NDK r27+ и выполните `./scripts/build-termux.sh`. Проверка результата: `python3 tests/check_android.py`.
+
 ### Ручная установка и Windows
+
+Для ноутбуков с Windows 11 ARM64 используйте `musiczero-windows-arm64-alpha.zip`. В архиве нативные ARM64-файлы; сборка и тесты выполняются на Windows ARM. Для x64 сохраняется `musiczero-windows-x64.zip`. Windows alpha поддерживает CLI и TUI настроек на русском/английском; трей, MPRIS и systemd доступны только в Linux. Для модулей, которым нужны FFmpeg/yt-dlp, эти программы должны быть в PATH.
 
 Скачайте архив для своей системы из [Releases](https://github.com/BBQQYT/MusicZero/releases) и распакуйте **папку `musiczero` целиком**, сохранив модули рядом с плеером:
 
@@ -70,6 +88,7 @@ musiczero/
 | Компонент | Что требуется |
 | --- | --- |
 | Плеер | Работающий аудиовывод; в Linux — ALSA либо настроенный интерфейс ALSA к PipeWire/PulseAudio |
+| Плеер Termux alpha | Android ARM64, PulseAudio Termux (`pulseaudio` + `pacat`); без трея и systemd |
 | Трей и MPRIS в Linux | Пользовательская сессия D-Bus; для трея — панель с поддержкой StatusNotifierItem |
 | YMZ | Аккаунт Яндекс Музыки и действующий OAuth-токен |
 | YouMZ | Вход через Firefox, LibreWolf, Chromium или Chrome; для аудио — `yt-dlp` в PATH |

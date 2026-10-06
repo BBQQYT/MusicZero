@@ -25,6 +25,7 @@ fn open_token_page() -> io::Result<()> {
     {
         let mut last_error = None;
         for browser in [
+            "termux-open-url",
             "xdg-open",
             "firefox",
             "librewolf",

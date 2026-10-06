@@ -738,7 +738,7 @@ impl Preload {
 }
 
 pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
-    let stream = rodio::OutputStreamBuilder::open_default_stream()?;
+    let mut stream = crate::output::Output::open()?;
     let sink = Arc::new(Sink::connect_new(stream.mixer()));
     let (mut player, mut mpris_rx) = Player::new(modules, selected, sink).await;
     let (tx, mut rx) = mpsc::channel(32);
@@ -751,6 +751,7 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
     let shutdown = mcz::shutdown::wait();
     tokio::pin!(shutdown);
     loop {
+        stream.check()?;
         if player.current.is_some() && player.sink.empty() {
             player.clear_current("trackFinished").await;
             player.retry_at = Instant::now();

@@ -2,7 +2,6 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-prefix=${MUSICZERO_PREFIX:-"$HOME/.local"}
 build_dir=${CARGO_TARGET_DIR:-"$root/target"}
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -10,7 +9,16 @@ if ! command -v cargo >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build --manifest-path "$root/Cargo.toml" --workspace --release --locked --target-dir "$build_dir"
+case "$(rustc -vV | sed -n 's/^host: //p')" in
+    *-android|*-androideabi)
+        prefix=${MUSICZERO_PREFIX:-${PREFIX:?Run the Android build inside Termux}}
+        cargo build --manifest-path "$root/Cargo.toml" --workspace --release --no-default-features --locked --target-dir "$build_dir"
+        ;;
+    *)
+        prefix=${MUSICZERO_PREFIX:-"$HOME/.local"}
+        cargo build --manifest-path "$root/Cargo.toml" --workspace --release --locked --target-dir "$build_dir"
+        ;;
+esac
 
 mkdir -p "$prefix/bin"
 install -m 755 "$build_dir/release/mz" "$prefix/bin/mz"

@@ -6,7 +6,7 @@ MusicZero is one audio player with replaceable providers: **Yandex Music**, **Yo
 
 ## Installation
 
-### Linux x86_64
+### Linux x86_64 / ARM64 alpha
 
 Requires `curl` and Python 3.8+:
 
@@ -14,7 +14,7 @@ Requires `curl` and Python 3.8+:
 curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
 ```
 
-The installer chooses the newest published release containing a Linux archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
+The installer detects the platform and CPU, chooses the newest published matching archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. ARM64 laptops use `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux with glibc 2.39+); desktop tray, MPRIS and user services work as on x64. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
 
 The installer opens a terminal wizard automatically, including when piped from `curl`. Use Up/Down (or j/k), Enter to confirm, and Esc to cancel. It lets you choose the prefix, optionally add `mz` to Bash/Zsh/Fish PATH, install missing runtime packages using apt/dnf/pacman/zypper (sudo may prompt), configure Local and Icecast, and log into Yandex/YouTube Music. Advanced settings include FFmpeg paths, SoundFont, radio proxy/TLS/buffering and Yandex mix preferences. YouTube login needs Firefox or Chromium/Chrome and a graphical session. Package installation and shell edits are optional; configuration can be retried without reinstalling.
 
@@ -42,7 +42,25 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 Replace `build-123` with an existing release tag. After updating, restart any running player to load the new binaries.
 
+### Termux ARM64 alpha
+
+Native Android 7+ (API 24), ARM64 only. Install inside Termux:
+
+```sh
+pkg install python curl pulseaudio ffmpeg
+curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+mz config
+```
+
+The installer selects `musiczero-termux-arm64-alpha.tar.gz` and defaults to `$PREFIX/bin`, already on Termux PATH. This is a native Bionic build; the Linux/glibc archive does not run directly in Termux. Both archives include all four providers. Audio uses Termux PulseAudio/`pacat`, automatically starting the server when playback starts. Pausing, seeking, five-track history and the RU/EN TUI use the same host engine. Tray, MPRIS and systemd are unavailable on Android.
+
+Use `termux-setup-storage` to grant access to shared music files, then select the folder in `mz config local`. YMZ opens the token page with `termux-open-url`. YouMZ requires `pkg install yt-dlp`; browser login needs desktop Firefox/Chromium, so use the manual session field in `mz config youmz` on Termux. Android may suspend background playback; keep Termux running and adjust its battery restrictions if needed. These are alpha builds: CI validates native Linux ARM64 playback, Android cross-compilation and the PulseAudio backend, but physical Android audio has not been tested.
+
+To build on the device: `pkg install rust clang make pkg-config git`, clone this repository and run `./install.sh` (`clang` includes libclang). To cross-build on Linux x64: install `libclang-dev`, run `rustup target add aarch64-linux-android`, set `ANDROID_NDK_HOME` to NDK r27+, then run `./scripts/build-termux.sh`. Inspect the result with `python3 tests/check_android.py`.
+
 ### Manual installation and Windows
+
+For Windows 11 ARM64 laptops, use `musiczero-windows-arm64-alpha.zip`. It contains native ARM64 executables and is built/tested on a Windows ARM runner; x64 users should keep using `musiczero-windows-x64.zip`. Windows alpha supports CLI and the RU/EN configuration TUI; tray, MPRIS and systemd remain Linux-only. FFmpeg/yt-dlp must be available on PATH for the providers that need them.
 
 Download the appropriate archive from [Releases](https://github.com/BBQQYT/MusicZero/releases) and extract the **entire `musiczero` folder**, preserving the modules beside the host:
 
@@ -70,6 +88,7 @@ Provider executables also end in `.exe` on Windows. In PowerShell, use `./mz.exe
 | Component | Requirements |
 | --- | --- |
 | Host | Working audio output. Linux needs ALSA or a configured ALSA interface to PipeWire/PulseAudio |
+| Termux alpha host | Android ARM64, Termux PulseAudio (`pulseaudio` + `pacat`); no desktop tray or systemd |
 | Linux tray/MPRIS | User D-Bus session; a desktop panel supporting StatusNotifierItem for the tray |
 | YMZ | Yandex Music account and a valid OAuth token |
 | YouMZ | YouTube Music browser login; Firefox, LibreWolf, Chromium or Chrome; `yt-dlp` on PATH for audio |
