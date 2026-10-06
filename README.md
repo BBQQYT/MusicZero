@@ -44,19 +44,19 @@ Replace `build-123` with an existing release tag. After updating, restart any ru
 
 ### Termux ARM64 alpha
 
-Native Android 7+ (API 24), ARM64 only. Install inside Termux:
+Native Android 8+ (API 26), ARM64 only. Install inside Termux:
 
 ```sh
-pkg install python curl pulseaudio ffmpeg
+pkg install python curl ffmpeg
 curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
 mz config
 ```
 
-The installer selects `musiczero-termux-arm64-alpha.tar.gz` and defaults to `$PREFIX/bin`, already on Termux PATH. This is a native Bionic build; the Linux/glibc archive does not run directly in Termux. Both archives include all four providers. Audio uses Termux PulseAudio/`pacat`: MusicZero reuses a running server or starts one automatically. If no real audio output exists, it tries AAudio (Android 8+) and then OpenSL ES; it reports an error if both fail, instead of playing into a dummy sink. An unusable default server configuration gets a minimal startup fallback without editing `default.pa`. Explicit `PULSE_SERVER` / `PULSE_SINK` settings are respected. Pausing, seeking, five-track history and the RU/EN TUI use the same host engine. Tray, MPRIS and systemd are unavailable on Android.
+The installer selects `musiczero-termux-arm64-alpha.tar.gz` and defaults to `$PREFIX/bin`, already on Termux PATH. This native Bionic build includes all four providers; the Linux/glibc archive does not run directly in Termux. Audio goes directly to Android’s system AAudio API, without PulseAudio, `pacat`, an audio daemon or JNI. Pausing, seeking, five-track history and the RU/EN TUI use the shared Rodio engine. Tray, MPRIS and systemd are unavailable on Android.
 
-Use `termux-setup-storage` to grant access to shared music files, then select the folder in `mz config local`. YMZ opens the token page with `termux-open-url`. YouMZ requires `pkg install yt-dlp`; browser login needs desktop Firefox/Chromium, so use the manual session field in `mz config youmz` on Termux. Android may suspend background playback; keep Termux running and adjust its battery restrictions if needed. These are alpha builds: CI validates native Linux ARM64 playback, Android cross-compilation and the PulseAudio backend, but physical Android audio has not been tested.
+Use `termux-setup-storage` to grant access to shared music files, then select the folder in `mz config local`. YMZ opens the token page with `termux-open-url`. YouMZ requires `pkg install yt-dlp`; browser login needs desktop Firefox/Chromium, so use the manual session field in `mz config youmz` on Termux. Android may suspend background playback; keep Termux running and adjust its battery restrictions if needed. These are alpha builds: CI validates native Linux ARM64 playback, Android cross-compilation and the AAudio backend against a native test library, but physical Android audio has not been tested.
 
-If an older alpha reports `Invalid client name 'MusicZero'`, rerun the installer to update (saved settings and tokens are retained). The fixed client bypasses Termux's failing locale conversion. If both Android outputs fail, run `pkg upgrade pulseaudio` and retry `mz start ymz`. Do not launch another foreground `pulseaudio` instance when a server is already running.
+Rerun the installer to upgrade from an older PulseAudio alpha; saved tokens and settings are retained. MusicZero no longer needs PulseAudio and leaves its configuration untouched. Android 8 is the minimum supported version. AAudio failures report their cause and stop playback; changing a Bluetooth device may require restarting playback.
 
 To build on the device: `pkg install rust clang make pkg-config git`, clone this repository and run `./install.sh` (`clang` includes libclang). To cross-build on Linux x64: install `libclang-dev`, run `rustup target add aarch64-linux-android`, set `ANDROID_NDK_HOME` to NDK r27+, then run `./scripts/build-termux.sh`. Inspect the result with `python3 tests/check_android.py`.
 
@@ -90,7 +90,7 @@ Provider executables also end in `.exe` on Windows. In PowerShell, use `./mz.exe
 | Component | Requirements |
 | --- | --- |
 | Host | Working audio output. Linux needs ALSA or a configured ALSA interface to PipeWire/PulseAudio |
-| Termux alpha host | Android ARM64, Termux PulseAudio (`pulseaudio` + `pacat`); no desktop tray or systemd |
+| Termux alpha host | Android 8+ ARM64, system AAudio without an audio daemon; no desktop tray or systemd |
 | Linux tray/MPRIS | User D-Bus session; a desktop panel supporting StatusNotifierItem for the tray |
 | YMZ | Yandex Music account and a valid OAuth token |
 | YouMZ | YouTube Music browser login; Firefox, LibreWolf, Chromium or Chrome; `yt-dlp` on PATH for audio |

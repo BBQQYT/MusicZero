@@ -44,19 +44,19 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 ### Termux ARM64 alpha
 
-Нативная сборка для Android 7+ (API 24), только ARM64. Выполните в Termux:
+Нативная сборка для Android 8+ (API 26), только ARM64. Выполните в Termux:
 
 ```sh
-pkg install python curl pulseaudio ffmpeg
+pkg install python curl ffmpeg
 curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
 mz config
 ```
 
-Установщик выбирает `musiczero-termux-arm64-alpha.tar.gz` и по умолчанию устанавливает в `$PREFIX/bin`, который уже находится в PATH Termux. Сборка использует Bionic; обычный Linux/glibc-архив напрямую в Termux не запускается. Оба архива содержат все четыре модуля. Звук идёт через PulseAudio/`pacat` Termux: MusicZero использует работающий сервер или запускает его автоматически. Если настоящего аудиовыхода нет, плеер пробует AAudio (Android 8+), затем OpenSL ES; при отказе обоих сообщает об ошибке вместо воспроизведения в пустой выход. При неработающей конфигурации сервера используется минимальный запуск без изменения `default.pa`. Заданные `PULSE_SERVER` / `PULSE_SINK` учитываются. Пауза, перемотка, история пяти треков и TUI на русском/английском используют общий движок. В Android нет трея, MPRIS и systemd.
+Установщик выбирает `musiczero-termux-arm64-alpha.tar.gz` и устанавливает в `$PREFIX/bin`, который уже находится в PATH Termux. Это нативная Bionic-сборка с четырьмя модулями; Linux/glibc-архив напрямую в Termux не запускается. Звук выводится напрямую через системный AAudio Android, без PulseAudio, `pacat`, аудиосервера и JNI. Пауза, перемотка, история пяти треков и TUI на русском/английском используют общий движок Rodio. В Android нет трея, MPRIS и systemd.
 
-Для доступа к общей папке музыки выполните `termux-setup-storage` и выберите каталог в `mz config local`. YMZ открывает страницу токена через `termux-open-url`. Для YouMZ нужен `pkg install yt-dlp`; вход через браузер требует настольного Firefox/Chromium, поэтому в Termux используйте ручное поле сессии в `mz config youmz`. Android может приостановить воспроизведение в фоне; держите Termux запущенным и при необходимости измените ограничения батареи приложения. Это alpha: CI проверяет воспроизведение на Linux ARM64, кросс-сборку Android и аудиодрайвер PulseAudio, но звук на физическом Android-устройстве ещё не проверен.
+Для доступа к общей папке музыки выполните `termux-setup-storage` и выберите каталог в `mz config local`. YMZ открывает страницу токена через `termux-open-url`. Для YouMZ нужен `pkg install yt-dlp`; вход через браузер требует настольного Firefox/Chromium, поэтому в Termux используйте ручное поле сессии в `mz config youmz`. Android может приостановить воспроизведение в фоне; держите Termux запущенным и при необходимости измените ограничения батареи приложения. Это alpha: CI проверяет воспроизведение на Linux ARM64, кросс-сборку Android и AAudio-выход с тестовой нативной библиотекой, но звук на физическом Android-устройстве ещё не проверен.
 
-Если старая alpha выдаёт `Invalid client name 'MusicZero'`, повторно запустите установщик для обновления: настройки и токены сохраняются. Исправленный клиент обходит сбой преобразования локали в Termux. Если оба аудиовыхода Android не запускаются, выполните `pkg upgrade pulseaudio` и повторите `mz start ymz`. Не запускайте второй `pulseaudio` в терминале, когда сервер уже работает.
+Для перехода со старой PulseAudio-alpha повторно запустите установщик: токены и настройки сохраняются. PulseAudio больше не нужен MusicZero; его конфигурация не меняется. Минимальная версия Android — 8. При ошибке AAudio плеер показывает причину и завершает воспроизведение; переключение Bluetooth-устройства может потребовать повторного запуска.
 
 Сборка на устройстве: `pkg install rust clang make pkg-config git`, затем клонируйте репозиторий и выполните `./install.sh` (libclang входит в пакет `clang`). Для кросс-сборки на Linux x64: установите `libclang-dev`, выполните `rustup target add aarch64-linux-android`, задайте `ANDROID_NDK_HOME` с NDK r27+ и выполните `./scripts/build-termux.sh`. Проверка результата: `python3 tests/check_android.py`.
 
@@ -90,7 +90,7 @@ musiczero/
 | Компонент | Что требуется |
 | --- | --- |
 | Плеер | Работающий аудиовывод; в Linux — ALSA либо настроенный интерфейс ALSA к PipeWire/PulseAudio |
-| Плеер Termux alpha | Android ARM64, PulseAudio Termux (`pulseaudio` + `pacat`); без трея и systemd |
+| Плеер Termux alpha | Android 8+ ARM64, системный AAudio без аудиосервера; без трея и systemd |
 | Трей и MPRIS в Linux | Пользовательская сессия D-Bus; для трея — панель с поддержкой StatusNotifierItem |
 | YMZ | Аккаунт Яндекс Музыки и действующий OAuth-токен |
 | YouMZ | Вход через Firefox, LibreWolf, Chromium или Chrome; для аудио — `yt-dlp` в PATH |

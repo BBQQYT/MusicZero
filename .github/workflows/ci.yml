@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus pulseaudio pulseaudio-utils
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
@@ -39,11 +39,11 @@ jobs:
         run: |
           cargo test --workspace --locked
           python3 -m unittest discover -s tests -p 'test_*.py'
-      - name: Test Termux audio backend on Linux
+      - name: Test Android AAudio backend on Linux
         if: runner.os == 'Linux'
         run: |
-          cargo build -p mz --no-default-features --features pulse-output --locked --target-dir target/pulse
-          MZ_TEST_PROFILE=pulse/debug MZ_PULSE_REAL=1 python3 tests/smoke_pulse.py
+          cargo build -p mz -p local -p icecast --no-default-features --features mz/aaudio-output --locked --target-dir target/aaudio
+          MZ_TEST_PROFILE=aaudio/debug python3 tests/smoke_aaudio.py
       - name: Test Windows workspace
         if: runner.os == 'Windows'
         run: cargo test --workspace --no-default-features --locked --target '${{ matrix.target }}'
@@ -115,7 +115,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: termux-arm64-alpha
-      - name: Cross-build Android ARM64 (API 24)
+      - name: Cross-build Android ARM64 (API 26)
         run: ./scripts/build-termux.sh
       - name: Check Android architecture and dependencies
         run: python3 tests/check_android.py

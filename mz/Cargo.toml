@@ -7,9 +7,10 @@ description = "MusicZero host and shared audio engine"
 [features]
 default = ["tray"]
 tray = ["dep:ksni"]
-pulse-output = []
+aaudio-output = []
 
 [dependencies]
+libloading = "0.8"
 mcz = { path = "../MCZ" }
 tokio = { version = "1", features = ["full"] }
 zbus = { version = "4.4", default-features = false, features = ["tokio"] }

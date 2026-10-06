@@ -8,13 +8,14 @@ if [ -z "$ndk" ]; then
     exit 1
 fi
 toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-if [ ! -x "$toolchain/aarch64-linux-android24-clang" ]; then
-    echo 'The Linux x64 NDK toolchain with Android API 24 is required.' >&2
+if [ ! -x "$toolchain/aarch64-linux-android26-clang" ]; then
+    echo 'The Linux x64 NDK toolchain with Android API 26 is required.' >&2
     exit 1
 fi
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$toolchain/aarch64-linux-android24-clang"
-export CC_aarch64_linux_android="$toolchain/aarch64-linux-android24-clang"
-export CXX_aarch64_linux_android="$toolchain/aarch64-linux-android24-clang++"
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$toolchain/aarch64-linux-android26-clang"
+export CC_aarch64_linux_android="$toolchain/aarch64-linux-android26-clang"
+export CXX_aarch64_linux_android="$toolchain/aarch64-linux-android26-clang++"
 export AR_aarch64_linux_android="$toolchain/llvm-ar"
-export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=\"$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot\" --target=aarch64-linux-android24"
+export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=\"$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot\" --target=aarch64-linux-android26"
+"$toolchain/aarch64-linux-android26-clang" -fsyntax-only -std=c11 -Wall -Wextra -Werror "$root/tests/fixtures/aaudio_mock.c"
 cargo build --manifest-path "$root/Cargo.toml" --workspace --release --no-default-features --locked --target aarch64-linux-android

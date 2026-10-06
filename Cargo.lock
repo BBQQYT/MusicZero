@@ -1728,6 +1728,7 @@ dependencies = [
  "crossterm",
  "env_logger",
  "ksni",
+ "libloading",
  "log",
  "mcz",
  "mz-module-support",

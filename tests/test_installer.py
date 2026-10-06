@@ -81,12 +81,12 @@ class InstallerTests(unittest.TestCase):
         release.assert_called_once_with('musiczero-termux-arm64-alpha.tar.gz')
         self.assertTrue((self.destination / 'mz').exists())
 
-    def test_termux_dependencies_use_pkg_without_sudo(self):
+    def test_termux_provider_dependencies_use_pkg_without_audio_server(self):
         ui = type('UI', (), {'yes': lambda self, title: True})()
         installed = False
         calls = []
         def which(name):
-            return '/termux/bin/'+name if name == 'pkg' or (installed and name in ('pulseaudio', 'pacat', 'pactl')) else None
+            return '/termux/bin/'+name if name == 'pkg' or (installed and name in ('ffmpeg', 'yt-dlp')) else None
         def run(args):
             nonlocal installed
             calls.append(args)
@@ -95,8 +95,14 @@ class InstallerTests(unittest.TestCase):
         with patch.object(installer, 'is_termux', return_value=True), \
              patch.object(installer.shutil, 'which', side_effect=which), \
              patch.object(installer, 'run_command', side_effect=run):
-            self.assertTrue(installer.dependencies(ui, 'ymz'))
-        self.assertEqual(calls, [['pkg', 'update'], ['pkg', 'install', '-y', 'pulseaudio']])
+            self.assertTrue(installer.dependencies(ui, 'youmz'))
+        self.assertEqual(calls, [['pkg', 'update'], ['pkg', 'install', '-y', 'ffmpeg', 'yt-dlp']])
+
+    def test_termux_ymz_needs_no_external_audio_program(self):
+        with patch.object(installer, 'is_termux', return_value=True), \
+             patch.object(installer.shutil, 'which') as which:
+            self.assertTrue(installer.dependencies(None, 'ymz'))
+        which.assert_not_called()
 
     def test_termux_setup_keeps_config_and_hides_desktop_controls(self):
         choices = iter([1, 2])
