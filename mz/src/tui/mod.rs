@@ -165,6 +165,9 @@ async fn language(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
 }
 async fn host_menu(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
     let mut keys = vec!["modules_dir", "log_filter", "temp_dir"];
+    if cfg!(target_os = "android") {
+        keys.push("notifications_enabled");
+    }
     if cfg!(all(feature = "tray", target_os = "linux")) {
         keys.push("tray_enabled");
     }

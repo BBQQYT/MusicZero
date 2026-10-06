@@ -519,6 +519,8 @@ def perform_install(args, ui):
         add_to_path(ui, executable.parent)
         configure(ui, executable)
     print(f"Установлено: {executable}")
+    if is_termux():
+        print("Кнопки вне консоли: установите приложение Termux:API из того же источника, что Termux, и выполните pkg install termux-api.")
     if str(executable.parent) in os.environ.get("PATH", "").split(os.pathsep):
         print("Запуск: mz modules; mz start ymz")
     else:

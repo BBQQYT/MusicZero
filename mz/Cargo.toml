@@ -32,3 +32,6 @@ rodio = { version = "0.21.1", default-features = false, features = ["playback"] 
 [[bin]]
 name = "mz"
 path = "src/main.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

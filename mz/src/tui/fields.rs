@@ -44,6 +44,10 @@ pub fn label(lang: Language, key: &str) -> &str {
         "log_filter" => ("Уровень журналирования", "Log filter"),
         "temp_dir" => ("Папка временного аудио", "Temporary audio folder"),
         "tray_enabled" => ("Показывать значок в трее", "Show tray icon"),
+        "notifications_enabled" => (
+            "Кнопки в уведомлении Android",
+            "Android notification controls",
+        ),
         _ => return key,
     };
     lang.text(ru, en)
@@ -77,6 +81,7 @@ pub fn hint(lang: Language, key: &str) -> &str {
         "log_filter" => ("Пусто — warn,mz=info. Например debug или warn. RUST_LOG имеет приоритет; нужен перезапуск.", "Empty uses warn,mz=info. Examples: debug, warn. RUST_LOG takes precedence; restart required."),
         "temp_dir" => ("Существующая папка. Пусто — системная. При пустом значении учитываются TMPDIR/TMP/TEMP.", "Existing folder. Empty uses the system default. When empty, uses TMPDIR/TMP/TEMP."),
         "tray_enabled" => ("Значок и меню в трее Linux. Изменение применяется после перезапуска плеера.", "Linux tray icon and menu. Restart the player to apply."),
+        "notifications_enabled" => ("Назад, пауза и вперёд вне консоли. Нужны приложение Termux:API и pkg install termux-api. Перезапустите плеер.", "Previous, pause and next outside the terminal. Requires the Termux:API app and pkg install termux-api. Restart the player."),
         _ => ("Enter — изменить; изменения сохраняются сразу.", "Enter to edit; changes are saved immediately."),
     };
     lang.text(ru, en)

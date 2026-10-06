@@ -3,6 +3,7 @@ mod feedback;
 mod history;
 mod ipc;
 mod live;
+mod notification;
 mod output;
 mod player;
 mod plugin;

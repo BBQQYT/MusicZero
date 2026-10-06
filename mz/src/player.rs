@@ -750,8 +750,11 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
         |failures: u32| Duration::from_secs((2u64.saturating_pow(failures.min(6)) * 5).min(300));
     let shutdown = mcz::shutdown::wait();
     tokio::pin!(shutdown);
-    loop {
-        stream.check()?;
+    let controls = crate::notification::Controls::new();
+    let result = loop {
+        if let Err(error) = stream.check() {
+            break Err(error);
+        }
         if player.current.is_some() && player.sink.empty() {
             player.clear_current("trackFinished").await;
             player.retry_at = Instant::now();
@@ -795,6 +798,20 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 player.feedback.sender.clone(),
             );
         }
+        controls.update(crate::notification::State {
+            title: player
+                .current
+                .as_ref()
+                .map(|track| track.title.clone())
+                .unwrap_or_default(),
+            artist: player
+                .current
+                .as_ref()
+                .map(|track| track.artist.clone())
+                .unwrap_or_default(),
+            source: player.module().manifest.name.clone(),
+            playing: player.active,
+        });
         tokio::select! {
             result = async { preload.pending.as_mut().expect("guarded pending load").as_mut().await }, if preload.pending.is_some() => {
                 preload.pending = None;
@@ -826,7 +843,7 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 let action = request.request["action"].as_str().unwrap_or("").to_owned();
                 let generation = player.generation;
                 let had_current = player.current.is_some();
-                if player.handle_control(request, &mut preload).await { break; }
+                if player.handle_control(request, &mut preload).await { break Ok(()); }
                 if player.generation != generation {
                     // Next during playback consumes the already loading/ready track.
                     // Next during loading skips it; successful switch/playlist discard it.
@@ -847,14 +864,15 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 }
                 if stop { preload.stop(&mut player.queue); }
             }
-            _ = &mut shutdown => break,
+            _ = &mut shutdown => break Ok(()),
             _ = tokio::time::sleep(Duration::from_millis(50)) => {},
         }
-    }
+    };
     preload.clear();
     player.clear_current("skip").await;
+    controls.close().await;
     let _ = tokio::time::timeout(Duration::from_secs(2), player.feedback.sender.drain()).await;
-    Ok(())
+    result
 }
 
 fn decode_audio(file: &NamedTempFile) -> Result<Decoder<BufReader<std::fs::File>>> {

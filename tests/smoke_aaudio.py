@@ -125,6 +125,6 @@ elif sys.argv[1]=='audio': sys.stdout.buffer.write((pathlib.Path(__file__).paren
     print('AAudio: startup/format/disconnect/stall errors and bounded shutdown release native resources: OK')
 
     # Existing comprehensive host tests use this exact native-output path too.
-    for test in ['smoke_seek.py', 'smoke_history.py', 'smoke_modules.py']:
+    for test in ['smoke_notification.py', 'smoke_seek.py', 'smoke_history.py', 'smoke_modules.py']:
         subprocess.run([sys.executable, str(ROOT / 'tests' / test)], env=env, check=True)
     print('AAudio: MPRIS/CLI seek, persistent history, wave feedback, Local formats and live Icecast: OK')
