@@ -36,6 +36,10 @@ with tempfile.TemporaryDirectory(prefix='mz-new-modules-') as tmp:
         r=subprocess.run(['ffmpeg','-nostdin','-v','error','-i','pipe:0','-f','null','-'],input=audio,capture_output=True)
         assert r.returncode==0,r.stderr
     print('Local: scanned and decoded',len(tracks),'files, including FLAC, AU, VOC, AIFF, WavPack, TTA, tracker MOD and a file without extension.',flush=True)
+    # Keep host playback observable while polling; the format fixtures last 150 ms.
+    playback_library=root/'host-music';playback_library.mkdir()
+    subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-f','lavfi','-i','sine=frequency=440:duration=30','-c:a','flac',str(playback_library/'playback.flac')],check=True)
+    json_module('local','set-setting','path',str(playback_library))
     marker=root/'auth-ok'
     data=(library/'tone.mp3').read_bytes()
     class Radio(http.server.BaseHTTPRequestHandler):
@@ -79,7 +83,8 @@ with tempfile.TemporaryDirectory(prefix='mz-new-modules-') as tmp:
             cli('set','icecast','buffer_ms','500')
             cli('switch','local')
             for _ in range(300):
-                if 'Локальная папка' in cli('status') and 'Playing' in cli('status'): break
+                status=cli('status')
+                if 'Локальная папка' in status and 'Playing' in status: break
                 time.sleep(.03)
             else:
                 log.seek(0);raise RuntimeError('Local playback failed: '+log.read())
