@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::io::Read;
@@ -26,7 +26,7 @@ pub struct Module {
     pub executable: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Track {
     pub id: String,
     pub title: String,
@@ -39,7 +39,7 @@ pub struct Track {
     pub stream: bool,
     #[serde(default = "default_buffer_ms")]
     pub buffer_ms: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub feedback: String,
 }
 

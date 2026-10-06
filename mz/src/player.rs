@@ -16,12 +16,54 @@ use zbus::zvariant::Value as BusValue;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
+#[derive(Clone)]
+struct QueuedTrack {
+    track: Track,
+    replay: bool,
+    history_index: Option<usize>,
+}
+
+impl From<Track> for QueuedTrack {
+    fn from(track: Track) -> Self {
+        Self {
+            track,
+            replay: false,
+            history_index: None,
+        }
+    }
+}
+
+impl std::ops::Deref for QueuedTrack {
+    type Target = Track;
+    fn deref(&self) -> &Track {
+        &self.track
+    }
+}
+
+impl std::ops::DerefMut for QueuedTrack {
+    fn deref_mut(&mut self) -> &mut Track {
+        &mut self.track
+    }
+}
+
+impl QueuedTrack {
+    fn as_replay(&self) -> Self {
+        let mut track = self.clone();
+        track.replay = true;
+        track.feedback.clear();
+        track
+    }
+}
+
 pub struct Player {
     modules: Vec<Module>,
     selected: usize,
     playlist: String,
-    queue: VecDeque<Track>,
-    current: Option<Track>,
+    queue: VecDeque<QueuedTrack>,
+    current: Option<QueuedTrack>,
+    history: crate::history::History,
+    history_navigation: Option<Vec<Track>>,
+    history_cursor: Option<usize>,
     current_file: Option<NamedTempFile>,
     sink: Arc<Sink>,
     active: bool,
@@ -34,6 +76,7 @@ pub struct Player {
     track_id: Arc<RwLock<String>>,
     duration_us: Arc<RwLock<i64>>,
     seekable: Arc<RwLock<bool>>,
+    can_previous: Arc<RwLock<bool>>,
     feedback: crate::feedback::Worker,
     continuous: bool,
     after: Option<String>,
@@ -54,6 +97,8 @@ impl Player {
         let track_id = Arc::new(RwLock::new(String::new()));
         let duration_us = Arc::new(RwLock::new(0i64));
         let seekable = Arc::new(RwLock::new(false));
+        let history = crate::history::History::load(&modules[selected].manifest.id);
+        let can_previous = Arc::new(RwLock::new(!history.entries(None).is_empty()));
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let mpris = if cfg!(target_os = "linux") {
             let player = MprisPlayer {
@@ -65,6 +110,7 @@ impl Player {
                 current_track_id: track_id.clone(),
                 current_duration_us: duration_us.clone(),
                 current_can_seek: seekable.clone(),
+                current_can_previous: can_previous.clone(),
                 track_url_prefix: "",
                 track_path_prefix: "/org/mz/Track",
             };
@@ -101,6 +147,9 @@ impl Player {
                 playlist,
                 queue: VecDeque::new(),
                 current: None,
+                history,
+                history_navigation: None,
+                history_cursor: None,
                 current_file: None,
                 sink,
                 active: true,
@@ -113,6 +162,7 @@ impl Player {
                 track_id,
                 duration_us,
                 seekable,
+                can_previous,
                 feedback: crate::feedback::Worker::new(),
                 continuous: false,
                 after: None,
@@ -143,7 +193,76 @@ impl Player {
             "artist": self.current.as_ref().map(|t| t.artist.as_str()).unwrap_or(""),
             "position_ms": self.sink.get_pos().as_millis().min(u64::MAX as u128) as u64,
             "duration_ms": if self.current.is_some() { (*self.duration_us.read().await).max(0) / 1000 } else { 0 },
-            "can_seek": self.current.as_ref().is_some_and(|track| !track.stream) && !self.sink.empty()})
+            "can_seek": self.current.as_ref().is_some_and(|track| !track.stream) && !self.sink.empty(),
+            "can_previous": *self.can_previous.read().await,
+            "history": self.history_entries()})
+    }
+
+    fn history_entries(&self) -> Vec<Track> {
+        self.history
+            .entries(self.current.as_ref().map(|track| track.id.as_str()))
+    }
+
+    async fn refresh_previous(&self) {
+        let index = self.history_cursor.map_or(0, |index| index + 1);
+        let available = self.history_navigation.as_ref().map_or_else(
+            || !self.history_entries().is_empty(),
+            |tracks| index < tracks.len(),
+        );
+        *self.can_previous.write().await = available;
+        if let Some(connection) = &self.mpris {
+            notify_changed(
+                connection,
+                HashMap::from([("CanGoPrevious", BusValue::from(available))]),
+            )
+            .await;
+        }
+    }
+
+    async fn replay(
+        &mut self,
+        selector: Option<(&str, bool)>,
+        preload: &mut Preload,
+    ) -> Result<()> {
+        // Snapshot the back stack before archiving the current track. This allows
+        // five consecutive Previous operations without shifting their indices.
+        let entries = if selector.is_some() || self.history_navigation.is_none() {
+            self.history_entries()
+        } else {
+            self.history_navigation.clone().unwrap_or_default()
+        };
+        let index = if let Some((value, by_id)) = selector {
+            if by_id {
+                entries.iter().position(|track| track.id == value)
+            } else {
+                value
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|number| number.checked_sub(1))
+            }
+        } else {
+            Some(self.history_cursor.map_or(0, |index| index + 1))
+        }
+        .filter(|index| *index < entries.len())
+        .ok_or("Нет предыдущего трека в истории (номера от 1 до 5)")?;
+        let track = QueuedTrack {
+            track: entries[index].clone(),
+            replay: true,
+            history_index: Some(index),
+        };
+        preload.restore(&mut self.queue);
+        if let Some(current) = &self.current {
+            self.queue.push_front(current.as_replay());
+        }
+        self.clear_current("skip").await;
+        self.history_navigation = Some(entries);
+        self.history_cursor = Some(index);
+        self.queue.push_front(track);
+        self.generation = self.generation.wrapping_add(1);
+        self.active = true;
+        self.retry_at = Instant::now();
+        self.refresh_previous().await;
+        Ok(())
     }
 
     fn set_active(&mut self, active: bool) {
@@ -160,6 +279,8 @@ impl Player {
         self.continuous = false;
         self.after = None;
         self.recent.clear();
+        self.history_navigation = None;
+        self.history_cursor = None;
     }
 
     fn accept_tracks(&mut self, mut batch: plugin::TrackList) {
@@ -172,7 +293,8 @@ impl Player {
             }
             batch.tracks.retain(|track| seen.insert(track.id.clone()));
         }
-        self.queue.extend(batch.tracks);
+        self.queue
+            .extend(batch.tracks.into_iter().map(QueuedTrack::from));
     }
 
     async fn clear_current(&mut self, event: &'static str) {
@@ -182,10 +304,13 @@ impl Player {
                     .map(|since| since.elapsed())
                     .unwrap_or_default(),
             );
-            self.feedback
-                .sender
-                .emit(self.module().clone(), track, event, played);
-            if self.continuous {
+            if !track.replay {
+                self.history.remember(track);
+                self.feedback
+                    .sender
+                    .emit(self.module().clone(), track, event, played);
+            }
+            if self.continuous && !track.replay {
                 self.after = Some(track.id.clone());
                 self.recent.push_back(track.id.clone());
                 if self.recent.len() > 256 {
@@ -204,6 +329,7 @@ impl Player {
         self.artist.write().await.clear();
         self.art_url.write().await.clear();
         self.track_id.write().await.clear();
+        self.refresh_previous().await;
         if let Some(connection) = &self.mpris {
             let mut changed = HashMap::new();
             changed.insert("CanSeek", BusValue::from(false));
@@ -223,7 +349,7 @@ impl Player {
         }
     }
 
-    async fn handle_mpris(&mut self, command: PlayerCommand) {
+    async fn handle_mpris(&mut self, command: PlayerCommand, preload: &mut Preload) {
         match command {
             PlayerCommand::Play => {
                 self.set_active(true);
@@ -250,6 +376,11 @@ impl Player {
                 self.retry_at = Instant::now();
                 self.active = true;
                 self.clear_current("skip").await;
+            }
+            PlayerCommand::Previous => {
+                if let Err(error) = self.replay(None, preload).await {
+                    log::debug!("MPRIS previous: {error}");
+                }
             }
             PlayerCommand::Stop => {
                 self.active = false;
@@ -294,10 +425,10 @@ impl Player {
         Ok(actual)
     }
 
-    async fn handle_control(&mut self, request: ControlRequest) -> bool {
+    async fn handle_control(&mut self, request: ControlRequest, preload: &mut Preload) -> bool {
         let action = request.request["action"].as_str().unwrap_or("");
         let value = request.request["value"].as_str().unwrap_or("");
-        if matches!(action, "set-setting" | "playlist")
+        if matches!(action, "set-setting" | "playlist" | "previous" | "replay")
             && request.request["module"]
                 .as_str()
                 .is_some_and(|id| id != self.module().manifest.id)
@@ -310,6 +441,17 @@ impl Player {
         let reply = match action {
             "ping" => json!({"ok":true}),
             "status" => self.status().await,
+            "history" => {
+                json!({"module":self.module().manifest.id,"tracks":self.history_entries()})
+            }
+            "previous" | "replay" => {
+                let selector = (action == "replay")
+                    .then_some((value, request.request["key"].as_str() == Some("id")));
+                match self.replay(selector, preload).await {
+                    Ok(()) => json!({"ok":true}),
+                    Err(error) => json!({"error":error.to_string()}),
+                }
+            }
             "seek" => {
                 let result = match SeekRequest::from_wire(
                     value,
@@ -327,23 +469,23 @@ impl Player {
                 json!({"modules": self.modules.iter().map(|m| json!({"id":m.manifest.id,"name":m.manifest.name})).collect::<Vec<_>>() })
             }
             "play" => {
-                self.handle_mpris(PlayerCommand::Play).await;
+                self.handle_mpris(PlayerCommand::Play, preload).await;
                 json!({"ok":true})
             }
             "pause" => {
-                self.handle_mpris(PlayerCommand::Pause).await;
+                self.handle_mpris(PlayerCommand::Pause, preload).await;
                 json!({"ok":true})
             }
             "toggle" => {
-                self.handle_mpris(PlayerCommand::PlayPause).await;
+                self.handle_mpris(PlayerCommand::PlayPause, preload).await;
                 self.status().await
             }
             "next" => {
-                self.handle_mpris(PlayerCommand::Next).await;
+                self.handle_mpris(PlayerCommand::Next, preload).await;
                 json!({"ok":true})
             }
             "stop" => {
-                self.handle_mpris(PlayerCommand::Stop).await;
+                self.handle_mpris(PlayerCommand::Stop, preload).await;
                 json!({"ok":true})
             }
             "switch" => match plugin::discover() {
@@ -356,6 +498,9 @@ impl Player {
                                 self.reset_continuation();
                                 self.modules = modules;
                                 self.selected = index;
+                                self.history =
+                                    crate::history::History::load(&self.module().manifest.id);
+                                self.refresh_previous().await;
                                 self.playlist = plugin::selected_playlist(self.module());
                                 self.queue.clear();
                                 self.active = true;
@@ -441,14 +586,14 @@ impl Player {
         false
     }
 
-    async fn set_track(&mut self, track: Track, file: NamedTempFile) -> Result<()> {
+    async fn set_track(&mut self, track: QueuedTrack, file: NamedTempFile) -> Result<()> {
         let source = decode_audio(&file)?;
         self.begin_track(track, source, Some(file)).await
     }
 
     async fn begin_track<S: rodio::Source + Send + 'static>(
         &mut self,
-        mut track: Track,
+        mut track: QueuedTrack,
         source: S,
         file: Option<NamedTempFile>,
     ) -> Result<()> {
@@ -489,16 +634,21 @@ impl Player {
             track.title,
             self.module().manifest.id
         );
-        self.feedback.sender.emit(
-            self.module().clone(),
-            &track,
-            "trackStarted",
-            Duration::ZERO,
-        );
+        if !track.replay {
+            self.history_navigation = None;
+            self.feedback.sender.emit(
+                self.module().clone(),
+                &track,
+                "trackStarted",
+                Duration::ZERO,
+            );
+        }
+        self.history_cursor = track.history_index;
         self.played = Duration::ZERO;
         self.playing_since = Some(Instant::now());
         self.current = Some(track);
         self.current_file = file;
+        self.refresh_previous().await;
         Ok(())
     }
 }
@@ -510,15 +660,15 @@ enum Audio {
 
 enum Loaded {
     Tracks(Result<plugin::TrackList>),
-    Audio(Track, Result<Audio>),
+    Audio(QueuedTrack, Result<Audio>),
 }
 
 type LoadFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Loaded> + Send>>;
 
 struct Preload {
     pending: Option<LoadFuture>,
-    loading_track: Option<Track>,
-    ready: Option<(Track, Audio)>,
+    loading_track: Option<QueuedTrack>,
+    ready: Option<(QueuedTrack, Audio)>,
 }
 
 impl Preload {
@@ -534,7 +684,7 @@ impl Preload {
         &mut self,
         module: Module,
         playlist: String,
-        queue: &mut VecDeque<Track>,
+        queue: &mut VecDeque<QueuedTrack>,
         after: Option<String>,
         feedback: crate::feedback::Sender,
     ) {
@@ -572,9 +722,16 @@ impl Preload {
         self.ready = None;
     }
 
-    fn stop(&mut self, queue: &mut VecDeque<Track>) {
+    fn stop(&mut self, queue: &mut VecDeque<QueuedTrack>) {
         self.pending = None;
         if let Some(track) = self.loading_track.take() {
+            queue.push_front(track);
+        }
+    }
+
+    fn restore(&mut self, queue: &mut VecDeque<QueuedTrack>) {
+        self.stop(queue);
+        if let Some((track, _audio)) = self.ready.take() {
             queue.push_front(track);
         }
     }
@@ -668,7 +825,7 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 let action = request.request["action"].as_str().unwrap_or("").to_owned();
                 let generation = player.generation;
                 let had_current = player.current.is_some();
-                if player.handle_control(request).await { break; }
+                if player.handle_control(request, &mut preload).await { break; }
                 if player.generation != generation {
                     // Next during playback consumes the already loading/ready track.
                     // Next during loading skips it; successful switch/playlist discard it.
@@ -681,9 +838,10 @@ pub async fn run(modules: Vec<Module>, selected: usize) -> Result<()> {
                 let generation = player.generation;
                 let had_current = player.current.is_some();
                 let stop = matches!(command, PlayerCommand::Stop);
-                player.handle_mpris(command).await;
+                let next = matches!(command, PlayerCommand::Next);
+                player.handle_mpris(command, &mut preload).await;
                 if player.generation != generation {
-                    if !had_current { preload.clear(); }
+                    if !next || !had_current { preload.clear(); }
                     consecutive_failures = 0;
                 }
                 if stop { preload.stop(&mut player.queue); }
@@ -715,7 +873,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn track(id: &str) -> Track {
+    fn track(id: &str) -> QueuedTrack {
         Track {
             id: id.into(),
             title: id.into(),
@@ -726,6 +884,7 @@ mod tests {
             buffer_ms: 1000,
             feedback: String::new(),
         }
+        .into()
     }
 
     #[cfg(unix)]

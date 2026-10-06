@@ -113,6 +113,9 @@ mz quit
 | `mz seek <time>` | Seek to seconds or MM:SS/HH:MM:SS; a leading +/− means relative offset |
 | `mz play`, `mz pause`, `mz toggle` | Playback controls |
 | `mz next` | Skip the current track; for radio, reconnect to the selected station |
+| `mz prev` / `mz previous` | Play the previous track; up to five steps back |
+| `mz history [id]` | List the last five distinct tracks, newest first; a named provider works while stopped |
+| `mz replay <number>` | Play a **1-based** entry from the active provider's history |
 | `mz stop` | Stop playback while keeping the host running |
 | `mz quit` | Exit the host |
 | `mz playlists` | List active provider's playlists/stations |
@@ -133,6 +136,15 @@ mz seek 90       # absolute: 90 seconds
 mz seek 1:30.5   # absolute: 90.5 seconds
 mz seek +15     # forward 15 seconds
 mz seek -10     # backward 10 seconds
+```
+
+The host remembers five previous tracks separately for every provider, across playlist changes, provider switches and restarts. A track enters history after it has started playing and is finished or skipped. `mz prev` goes back through that history; `mz next` returns through the tracks you left, then continues the existing queue. Replay starts at the beginning and fetches audio again, so the track must still be available from its provider. Replaying YMZ wave tracks keeps the continuation cursor and does not resend old batch feedback. Live radio is excluded because past broadcasts cannot be fetched as tracks. Linux MPRIS Previous and the tray's previous-track/history menu use the same controls.
+
+```sh
+mz prev          # play the previous track
+mz history       # active provider's five most recent tracks
+mz replay 3      # play entry 3; next returns to the interrupted track
+mz history ymz   # inspect saved history even while the player is stopped
 ```
 
 ## Settings menu
@@ -302,6 +314,7 @@ Configuration bases follow `XDG_CONFIG_HOME`/`~/.config` on Linux and `APPDATA` 
 | Local settings | Config: `mz-local/settings.json` |
 | Icecast stations/settings | Config: `mz-icecast/settings.json` |
 | Selected playlist for each provider | Config: `mz/<id>.playlist` |
+| Last five tracks for each provider (metadata only) | Config: `mz/<id>.history.json` |
 | Local metadata index | Cache: `mz-local/index.json` |
 
 Credentials and Local/Icecast settings are saved atomically; newly written files have mode `0600` on Unix. Custom providers manage their own configuration.
@@ -374,6 +387,7 @@ python3 tests/smoke_modules.py
 python3 tests/smoke_https.py
 python3 tests/smoke_seek.py
 python3 tests/smoke_wave.py
+python3 tests/smoke_history.py
 python3 tests/smoke_config.py
 ```
 
@@ -387,6 +401,8 @@ python3 tests/check_services.py --host
 python3 tests/check_services.py --module youmz --host
 # Check wave continuation beyond the first batch
 python3 tests/check_services.py --module ymz --host --wave-tracks 15
+# Check Previous/replay and return using real service audio
+python3 tests/check_services.py --host --wave-tracks 7 --history
 ```
 
 CI builds Linux x64 and Windows x64. Pushes to `main`/`master` publish `build-<run_number>` prereleases after both builds pass; `v*` tags publish versioned releases. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).

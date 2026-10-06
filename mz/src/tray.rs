@@ -12,6 +12,8 @@ struct MusicTray {
     playlists: Vec<(String, String)>,
     current_playlist: usize,
     playing: String,
+    can_previous: bool,
+    history: Vec<(String, String)>,
 }
 
 fn send(action: &'static str, value: String) {
@@ -53,6 +55,49 @@ impl Tray for MusicTray {
                 StandardItem {
                     label: label.into(),
                     activate: Box::new(move |_: &mut Self| send(action, String::new())),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+        items.push(
+            StandardItem {
+                label: "Предыдущий трек".into(),
+                enabled: self.can_previous,
+                activate: Box::new(|_: &mut Self| send("previous", String::new())),
+                ..Default::default()
+            }
+            .into(),
+        );
+        if !self.history.is_empty() {
+            let module = self
+                .modules
+                .get(self.selected)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+            let submenu = self.history.iter().map(|(id, label)| {
+                let id = id.clone();
+                let module = module.clone();
+                StandardItem {
+                    label: label.clone(),
+                    activate: Box::new(move |_: &mut Self| {
+                        let id = id.clone();
+                        let module = module.clone();
+                        tokio::spawn(async move {
+                            match ipc::call(&json!({"action":"replay","value":id,"key":"id","module":module})).await {
+                                Ok(reply) if reply.get("error").is_some() => log::warn!("Трей: {}", reply["error"]),
+                                Err(error) => log::warn!("Трей: {error}"),
+                                _ => {}
+                            }
+                        });
+                    }),
+                    ..Default::default()
+                }.into()
+            }).collect();
+            items.push(
+                SubMenu {
+                    label: "Последние пять треков".into(),
+                    submenu,
                     ..Default::default()
                 }
                 .into(),
@@ -139,6 +184,8 @@ pub fn spawn(modules: Vec<Module>) {
             playlists: Vec::new(),
             current_playlist: 0,
             playing: "Запуск MusicZero...".into(),
+            can_previous: false,
+            history: Vec::new(),
         };
         let handle = match tray.spawn().await {
             Ok(handle) => Arc::new(handle),
@@ -178,6 +225,22 @@ pub fn spawn(modules: Vec<Module>) {
                     }
                 }
                 let playlists = playlists.clone();
+                let can_previous = status["can_previous"].as_bool().unwrap_or(false);
+                let history = status["history"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|track| {
+                        Some((
+                            track["id"].as_str()?.to_owned(),
+                            format!(
+                                "{} — {}",
+                                track["artist"].as_str().unwrap_or(""),
+                                track["title"].as_str().unwrap_or("")
+                            ),
+                        ))
+                    })
+                    .collect();
                 let _ = handle
                     .update(move |tray| {
                         tray.selected = tray
@@ -191,10 +254,12 @@ pub fn spawn(modules: Vec<Module>) {
                             .unwrap_or(0);
                         tray.playlists = playlists;
                         tray.playing = playing;
+                        tray.can_previous = can_previous;
+                        tray.history = history;
                     })
                     .await;
             }
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }

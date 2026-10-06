@@ -11,6 +11,7 @@ pub enum PlayerCommand {
     Play,
     Pause,
     Next,
+    Previous,
     Stop,
     Seek(i64),        // относительное смещение в микросекундах
     SetPosition(i64), // абсолютная позиция в микросекундах
@@ -63,6 +64,7 @@ pub struct MprisPlayer {
     pub current_track_id: Arc<RwLock<String>>,
     pub current_duration_us: Arc<RwLock<i64>>,
     pub current_can_seek: Arc<RwLock<bool>>,
+    pub current_can_previous: Arc<RwLock<bool>>,
     pub track_url_prefix: &'static str,
     pub track_path_prefix: &'static str,
 }
@@ -71,6 +73,10 @@ pub struct MprisPlayer {
 impl MprisPlayer {
     async fn next(&self) {
         let _ = self.cmd_tx.send(PlayerCommand::Next);
+    }
+
+    async fn previous(&self) {
+        let _ = self.cmd_tx.send(PlayerCommand::Previous);
     }
 
     async fn play_pause(&self) {
@@ -126,8 +132,8 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn can_go_previous(&self) -> bool {
-        false
+    async fn can_go_previous(&self) -> bool {
+        *self.current_can_previous.read().await
     }
 
     #[zbus(property)]

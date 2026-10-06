@@ -54,7 +54,7 @@ def account_check(module, env, root):
           f'{audio.stat().st_size} audio bytes, full decode OK', flush=True)
 
 
-def host_check(modules, env, root, wave_tracks=0):
+def host_check(modules, env, root, wave_tracks=0, history=False):
     folder = root / 'modules'
     for module in modules:
         target = folder / module
@@ -127,6 +127,39 @@ def host_check(modules, env, root, wave_tracks=0):
                             raise RuntimeError(f'Wave stopped after {len(seen)} distinct tracks')
                     print(f'ymz: {len(seen)} distinct real wave tracks downloaded and started '
                           'across batch boundaries using next: OK', flush=True)
+                if history:
+                    original_id = ipc('status')['track_id']
+                    if not ipc('history')['tracks']:
+                        run([host, 'next'], env)
+                        deadline = time.monotonic() + 180
+                        while time.monotonic() < deadline:
+                            status = ipc('status')
+                            if status.get('can_seek') and status['track_id'] != original_id:
+                                original_id = status['track_id']
+                                break
+                            time.sleep(.1)
+                        else:
+                            raise RuntimeError(f'{module}: next track failed before history check')
+                    tracks = ipc('history')['tracks']
+                    assert 1 <= len(tracks) <= 5, tracks
+                    previous_id = tracks[0]['id']
+                    for action, value, expected in [('previous', '', previous_id), ('next', '', original_id),
+                                                     ('replay', '1', previous_id), ('next', '', original_id)]:
+                        ipc(action, value)
+                        deadline = time.monotonic() + 180
+                        while time.monotonic() < deadline:
+                            status = ipc('status')
+                            if status.get('can_seek') and status['track_id'] == expected:
+                                break
+                            if process.poll() is not None:
+                                raise RuntimeError('Audio host exited while replaying history')
+                            time.sleep(.1)
+                        else:
+                            raise RuntimeError(f'{module}: {action} did not start historical audio')
+                        ipc('pause')
+                        assert ipc('status')['position_ms'] < 2_000
+                    print(f'{module}: real audio Previous, selected replay and return to interrupted track OK',
+                          flush=True)
             run([host, 'quit'], env)
             assert process.wait(timeout=10) == 0
             log.seek(0)
@@ -145,9 +178,12 @@ def main():
     parser.add_argument('--host', action='store_true', help='also check host playback/seeking with ALSA null')
     parser.add_argument('--wave-tracks', type=int, default=0,
                         help='with --host, start this many distinct real wave tracks using next (at least 6)')
+    parser.add_argument('--history', action='store_true', help='with --host, replay real previous tracks')
     args = parser.parse_args()
     if args.wave_tracks and (args.wave_tracks < 6 or not args.host or args.module == 'youmz'):
         parser.error('--wave-tracks requires --host, YMZ and a count of at least 6')
+    if args.history and not args.host:
+        parser.error('--history requires --host')
     modules = ['ymz', 'youmz'] if args.module == 'both' else [args.module]
     original = pathlib.Path(os.environ.get('XDG_CONFIG_HOME') or pathlib.Path.home() / '.config')
     with tempfile.TemporaryDirectory(prefix='mz-services-') as tmp:
@@ -167,7 +203,7 @@ def main():
         for module in modules:
             account_check(module, env, root)
         if args.host:
-            host_check(modules, env, root, args.wave_tracks)
+            host_check(modules, env, root, args.wave_tracks, args.history)
 
 
 if __name__ == '__main__':

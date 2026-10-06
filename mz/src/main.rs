@@ -1,5 +1,6 @@
 mod config;
 mod feedback;
+mod history;
 mod ipc;
 mod live;
 mod player;
@@ -72,6 +73,9 @@ fn help() {
   mz play|pause|toggle    Управление воспроизведением\n\
   mz seek <время>         Позиция: 90, 1:30; смещение: +15, -10\n\
   mz next|stop|quit       Следующий трек, остановка, выход\n\
+  mz prev                 Предыдущий трек (до пяти назад)\n\
+  mz history [модуль]     Последние пять треков, новые сверху\n\
+  mz replay <номер>       Прослушать трек из истории\n\
   mz playlists            Список плейлистов\n\
   mz playlist <id|номер>  Выбрать плейлист\n\
   mz settings [модуль]    Настройки сервиса\n\
@@ -88,12 +92,12 @@ fn validate_args(args: &[String]) -> Result<()> {
     };
     let valid = match action {
         "set" => matches!(args.len(), 3 | 4),
-        "settings" | "playlist" | "config" | "tui" => matches!(args.len(), 1 | 2),
+        "settings" | "playlist" | "config" | "tui" | "history" => matches!(args.len(), 1 | 2),
         "wave" => matches!(args.len(), 1 | 3),
-        "start" | "switch" | "login" | "seek" => args.len() == 2,
+        "start" | "switch" | "login" | "seek" | "replay" => args.len() == 2,
         "modules" | "status" | "play" | "resume" | "pause" | "toggle" | "pp" | "next" | "skip"
-        | "stop" | "quit" | "playlists" | "help" | "--help" | "-h" | "version" | "--version"
-        | "-V" => args.len() == 1,
+        | "prev" | "previous" | "stop" | "quit" | "playlists" | "help" | "--help" | "-h"
+        | "version" | "--version" | "-V" => args.len() == 1,
         _ => args.len() == 1,
     };
     if valid {
@@ -201,6 +205,33 @@ async fn main() -> Result<()> {
         Some("next" | "skip") => {
             command("next", "", "").await?;
             println!("⏭ Следующий трек");
+        }
+        Some("prev" | "previous") => {
+            command("previous", "", "").await?;
+            println!("⏮ Предыдущий трек");
+        }
+        Some("history") => {
+            let tracks: Vec<plugin::Track> = if let Some(id) = args.get(1) {
+                let selected = module(&modules, id)?;
+                match command("history", "", "").await {
+                    Ok(response) if response["module"] == selected.manifest.id => {
+                        serde_json::from_value(response["tracks"].clone())?
+                    }
+                    _ => history::History::load(&selected.manifest.id).entries(None),
+                }
+            } else {
+                serde_json::from_value(command("history", "", "").await?["tracks"].clone())?
+            };
+            if tracks.is_empty() {
+                println!("История треков пока пуста.");
+            }
+            for (index, track) in tracks.iter().enumerate() {
+                println!("{}. {} — {}", index + 1, track.artist, track.title);
+            }
+        }
+        Some("replay") => {
+            command("replay", &args[1], "").await?;
+            println!("▶ Трек из истории");
         }
         Some("stop") => {
             command("stop", "", "").await?;
