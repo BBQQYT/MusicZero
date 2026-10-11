@@ -43,11 +43,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus zip clang lld
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.artifact }}
 
