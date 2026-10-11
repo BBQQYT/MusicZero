@@ -14,44 +14,74 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
+            platform: linux
+            arch: x64
             artifact: musiczero-linux-x64
           - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
             artifact: musiczero-linux-arm64-alpha
           - os: windows-2022
-            artifact: musiczero-windows-x64
+            platform: windows
+            arch: x64
             target: x86_64-pc-windows-msvc
+            artifact: musiczero-windows-x64
           - os: windows-11-arm
-            artifact: musiczero-windows-arm64-alpha
+            platform: windows
+            arch: arm64
             target: aarch64-pc-windows-msvc
+            artifact: musiczero-windows-arm64-alpha
+
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus
+
+      # Системные зависимости Linux (компиляция и кросс-компиляция)
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config libsqlite3-dev ffmpeg openssl dbus zip clang lld
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ matrix.os == 'windows-11-arm' && 'stable-aarch64-pc-windows-msvc' || 'stable' }}
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.artifact }}
+
+      # Утилита кросс-компиляции MSVC для таргетов Windows
+      - name: Install cargo-xwin
+        if: matrix.platform == 'windows'
+        run: cargo install --locked cargo-xwin
+
+      # --- ТЕСТЫ LINUX (только на x64 хосте) ---
       - name: Test Linux workspace and installer
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
         run: |
           cargo test --workspace --locked
           python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Test Android AAudio backend on Linux
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
         run: |
           cargo build -p mz -p local -p icecast --no-default-features --features mz/aaudio-output --locked --target-dir target/aaudio
           MZ_TEST_PROFILE=aaudio/debug python3 tests/smoke_aaudio.py
-      - name: Test Windows workspace
-        if: runner.os == 'Windows'
-        run: cargo test --workspace --no-default-features --locked --target '${{ matrix.target }}'
-      - name: Build Linux binaries
-        if: runner.os == 'Linux'
+
+      # --- СБОРКА LINUX ---
+      - name: Build Linux x64
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
         run: cargo build --workspace --release --locked
-      - name: Test Linux playback and seeking
-        if: runner.os == 'Linux'
+
+      - name: Build Linux ARM64
+        if: matrix.platform == 'linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Test Linux playback and seeking (x64 only)
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
         env:
           MZ_TEST_PROFILE: release
         run: |
@@ -62,41 +92,61 @@ jobs:
           python3 tests/smoke_service.py
           python3 tests/smoke_modules.py
           python3 tests/smoke_https.py
+
+      # --- СБОРКА WINDOWS (Кросс-компиляция через cargo-xwin) ---
       - name: Build Windows binaries
-        if: runner.os == 'Windows'
-        run: cargo build --workspace --release --no-default-features --locked --target '${{ matrix.target }}'
+        if: matrix.platform == 'windows'
+        run: cargo xwin build --workspace --release --no-default-features --locked --target ${{ matrix.target }}
+
+      # --- УПАКОВКА LINUX ---
       - name: Package Linux release
-        if: runner.os == 'Linux' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+        if: matrix.platform == 'linux' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         run: |
+          TARGET_DIR="${{ matrix.target && format('target/{0}/release', matrix.target) || 'target/release' }}"
           mkdir -p dist/musiczero/modules/{ymz,youmz,local,icecast}
-          cp target/release/mz README.md README_RU.md LICENSE dist/musiczero/
-          cp modules/ymz/module.json target/release/ymz-module dist/musiczero/modules/ymz/
-          cp modules/youmz/module.json target/release/youmz-module dist/musiczero/modules/youmz/
-          cp modules/local/module.json modules/local/README.md target/release/local-module dist/musiczero/modules/local/
-          cp modules/icecast/module.json modules/icecast/README.md target/release/icecast-module dist/musiczero/modules/icecast/
-          tar -czf '${{ matrix.artifact }}.tar.gz' -C dist musiczero
+          cp "$TARGET_DIR/mz" README.md README_RU.md LICENSE dist/musiczero/
+          cp modules/ymz/module.json "$TARGET_DIR/ymz-module" dist/musiczero/modules/ymz/
+          cp modules/youmz/module.json "$TARGET_DIR/youmz-module" dist/musiczero/modules/youmz/
+          cp modules/local/module.json modules/local/README.md "$TARGET_DIR/local-module" dist/musiczero/modules/local/
+          cp modules/icecast/module.json modules/icecast/README.md "$TARGET_DIR/icecast-module" dist/musiczero/modules/icecast/
+          tar -czf "${{ matrix.artifact }}.tar.gz" -C dist musiczero
+
+      # --- УПАКОВКА WINDOWS (Bash + zip вместо PowerShell) ---
       - name: Package Windows release
-        if: runner.os == 'Windows' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-        shell: pwsh
+        if: matrix.platform == 'windows' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         run: |
-          New-Item -ItemType Directory -Force dist/musiczero/modules/ymz,dist/musiczero/modules/youmz,dist/musiczero/modules/local,dist/musiczero/modules/icecast | Out-Null
-          $binaries = 'target/${{ matrix.target }}/release'
-          Copy-Item "$binaries/mz.exe",README.md,README_RU.md,LICENSE dist/musiczero/
-          Copy-Item modules/ymz/module.json,"$binaries/ymz-module.exe" dist/musiczero/modules/ymz/
-          Copy-Item modules/youmz/module.json,"$binaries/youmz-module.exe" dist/musiczero/modules/youmz/
-          Copy-Item modules/local/module.json,modules/local/README.md,"$binaries/local-module.exe" dist/musiczero/modules/local/
-          Copy-Item modules/icecast/module.json,modules/icecast/README.md,"$binaries/icecast-module.exe" dist/musiczero/modules/icecast/
-          $expectedMachine = if ('${{ matrix.target }}'.StartsWith('aarch64')) { 0xAA64 } else { 0x8664 }
-          foreach ($binary in Get-ChildItem dist/musiczero -Recurse -Filter '*.exe') {
-            $bytes = [System.IO.File]::ReadAllBytes($binary.FullName)
-            $pe = [System.BitConverter]::ToInt32($bytes, 0x3c)
-            $machine = [System.BitConverter]::ToUInt16($bytes, $pe + 4)
-            if ($machine -ne $expectedMachine) { throw "Wrong architecture: $($binary.Name)" }
-          }
-          & ./dist/musiczero/mz.exe modules
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows modules failed' }
-          Compress-Archive -Path dist/musiczero -DestinationPath '${{ matrix.artifact }}.zip'
-      - uses: actions/upload-artifact@v4
+          BIN_DIR="target/${{ matrix.target }}/release"
+          mkdir -p dist/musiczero/modules/{ymz,youmz,local,icecast}
+          cp "$BIN_DIR/mz.exe" README.md README_RU.md LICENSE dist/musiczero/
+          cp modules/ymz/module.json "$BIN_DIR/ymz-module.exe" dist/musiczero/modules/ymz/
+          cp modules/youmz/module.json "$BIN_DIR/youmz-module.exe" dist/musiczero/modules/youmz/
+          cp modules/local/module.json modules/local/README.md "$BIN_DIR/local-module.exe" dist/musiczero/modules/local/
+          cp modules/icecast/module.json modules/icecast/README.md "$BIN_DIR/icecast-module.exe" dist/musiczero/modules/icecast/
+
+          # Валидация заголовка PE через Python
+          python3 - << 'EOF'
+          import os, struct, sys
+
+          target = "${{ matrix.target }}"
+          expected = 0xAA64 if target.startswith("aarch64") else 0x8664
+
+          for root, _, files in os.walk("dist/musiczero"):
+              for file in files:
+                  if file.endswith(".exe"):
+                      path = os.path.join(root, file)
+                      with open(path, "rb") as f:
+                          data = f.read()
+                      pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
+                      machine = struct.unpack_from("<H", data, pe_offset + 4)[0]
+                      if machine != expected:
+                          print(f"Error: {file} architecture mismatch! Got {hex(machine)}, expected {hex(expected)}")
+                          sys.exit(1)
+          EOF
+
+          (cd dist && zip -r "../${{ matrix.artifact }}.zip" musiczero)
+
+      # В Forgejo стабильно работает upload-artifact@v3
+      - uses: actions/upload-artifact@v3
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         with:
           name: ${{ matrix.artifact }}
@@ -130,7 +180,7 @@ jobs:
             fi
           done
           tar -czf musiczero-termux-arm64-alpha.tar.gz -C dist musiczero
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v3
         if: github.event_name == 'push'
         with:
           name: musiczero-termux-arm64-alpha
@@ -141,32 +191,56 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     needs: [build, termux-alpha]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      # Скачивание артефактов (v3 скачивает каждый артефакт в поддиректорию с именем артефакта)
+      - uses: actions/download-artifact@v3
         with:
-          pattern: musiczero-*
-          merge-multiple: true
-      - name: Publish versioned release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            musiczero-*.tar.gz
-            musiczero-*.zip
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-      - name: Publish automatic build
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: Automatic build #${{ github.run_number }}
-          target_commitish: ${{ github.sha }}
-          prerelease: true
-          body: Built from commit ${{ github.sha }} after Linux x64/ARM64, Windows x64/ARM64 and Android ARM64 builds passed. ARM64 archives are alpha; Android device audio is not hardware-tested.
-          files: |
-            musiczero-*.tar.gz
-            musiczero-*.zip
-          fail_on_unmatched_files: true
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist-release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} dist-release/ \;
+          ls -la dist-release/
+
+      - name: Publish Release to Forgejo
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          IS_PRERELEASE=false
+          RELEASE_TITLE="Release $TAG_NAME"
+          BODY="Automated release from commit ${GITHUB_SHA}"
+
+          if [[ "$GITHUB_REF" =~ refs/heads/.* ]]; then
+            TAG_NAME="build-${GITHUB_RUN_NUMBER}"
+            RELEASE_TITLE="Automatic build #${GITHUB_RUN_NUMBER}"
+            IS_PRERELEASE=true
+            BODY="Built from commit ${GITHUB_SHA}. Linux x64/ARM64, Windows x64/ARM64 and Android ARM64 builds."
+          fi
+
+          # 1. Создание релиза через Forgejo API
+          RELEASE_DATA=$(curl -s -f -X POST "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "tag_name": "${TAG_NAME}",
+            "name": "${RELEASE_TITLE}",
+            "body": "${BODY}",
+            "prerelease": ${IS_PRERELEASE},
+            "target_commitish": "${GITHUB_SHA}"
+          }
+          EOF
+          )
+
+          RELEASE_ID=$(echo "$RELEASE_DATA" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          echo "Created release ID: $RELEASE_ID"
+
+          # 2. Загрузка бинарных ассетов
+          for file in dist-release/*; do
+            filename=$(basename "$file")
+            echo "Uploading $filename..."
+            curl -s -f -X POST "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=${filename}" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file"
+          done
