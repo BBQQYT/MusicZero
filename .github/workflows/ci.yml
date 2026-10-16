@@ -68,10 +68,11 @@ jobs:
       - name: Package Linux release
         if: runner.os == 'Linux' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         run: |
-          mkdir -p dist/musiczero/modules/{ymz,youmz,local,icecast}
+          mkdir -p dist/musiczero/modules/{ymz,youmz,spotify,local,icecast}
           cp target/release/mz README.md README_RU.md LICENSE dist/musiczero/
           cp modules/ymz/module.json target/release/ymz-module dist/musiczero/modules/ymz/
           cp modules/youmz/module.json target/release/youmz-module dist/musiczero/modules/youmz/
+          cp modules/spotify/module.json modules/spotify/README.md target/release/spotify-module dist/musiczero/modules/spotify/
           cp modules/local/module.json modules/local/README.md target/release/local-module dist/musiczero/modules/local/
           cp modules/icecast/module.json modules/icecast/README.md target/release/icecast-module dist/musiczero/modules/icecast/
           tar -czf '${{ matrix.artifact }}.tar.gz' -C dist musiczero
@@ -79,11 +80,12 @@ jobs:
         if: runner.os == 'Windows' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/musiczero/modules/ymz,dist/musiczero/modules/youmz,dist/musiczero/modules/local,dist/musiczero/modules/icecast | Out-Null
+          New-Item -ItemType Directory -Force dist/musiczero/modules/ymz,dist/musiczero/modules/youmz,dist/musiczero/modules/spotify,dist/musiczero/modules/local,dist/musiczero/modules/icecast | Out-Null
           $binaries = 'target/${{ matrix.target }}/release'
           Copy-Item "$binaries/mz.exe",README.md,README_RU.md,LICENSE dist/musiczero/
           Copy-Item modules/ymz/module.json,"$binaries/ymz-module.exe" dist/musiczero/modules/ymz/
           Copy-Item modules/youmz/module.json,"$binaries/youmz-module.exe" dist/musiczero/modules/youmz/
+          Copy-Item modules/spotify/module.json,modules/spotify/README.md,"$binaries/spotify-module.exe" dist/musiczero/modules/spotify/
           Copy-Item modules/local/module.json,modules/local/README.md,"$binaries/local-module.exe" dist/musiczero/modules/local/
           Copy-Item modules/icecast/module.json,modules/icecast/README.md,"$binaries/icecast-module.exe" dist/musiczero/modules/icecast/
           $expectedMachine = if ('${{ matrix.target }}'.StartsWith('aarch64')) { 0xAA64 } else { 0x8664 }
@@ -121,9 +123,9 @@ jobs:
         run: python3 tests/check_android.py
       - name: Package Termux alpha
         run: |
-          mkdir -p dist/musiczero/modules/{ymz,youmz,local,icecast}
+          mkdir -p dist/musiczero/modules/{ymz,youmz,spotify,local,icecast}
           cp target/aarch64-linux-android/release/mz README.md README_RU.md LICENSE dist/musiczero/
-          for module in ymz youmz local icecast; do
+          for module in ymz youmz spotify local icecast; do
             cp modules/$module/module.json target/aarch64-linux-android/release/$module-module dist/musiczero/modules/$module/
             if [ -f modules/$module/README.md ]; then
               cp modules/$module/README.md dist/musiczero/modules/$module/

@@ -2,7 +2,7 @@
 
 [Русский README](README_RU.md)
 
-MusicZero is one audio player with replaceable providers: **Yandex Music**, **YouTube Music**, **a local music folder**, and **Icecast radio**. `mz` owns audio output, the queue, playback controls, next-track preloading and Linux desktop integration. Providers run as separate executables.
+MusicZero is one audio player with replaceable providers: **Yandex Music**, **YouTube Music**, **Spotify**, **a local music folder**, and **Icecast radio**. `mz` owns audio output, the queue, playback controls, next-track preloading and Linux desktop integration. Providers run as separate executables.
 
 ## Installation
 
@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 The installer detects the platform and CPU, chooses the newest published matching archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. ARM64 laptops use `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux with glibc 2.39+); desktop tray, MPRIS and user services work as on x64. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
 
-The installer opens a terminal wizard automatically, including when piped from `curl`. Use Up/Down (or j/k), Enter to confirm, and Esc to cancel. It lets you choose the prefix, optionally add `mz` to Bash/Zsh/Fish PATH, install missing runtime packages using apt/dnf/pacman/zypper (sudo may prompt), configure Local and Icecast, and log into Yandex/YouTube Music. Advanced settings include FFmpeg paths, SoundFont, radio proxy/TLS/buffering and Yandex mix preferences. YouTube login needs Firefox or Chromium/Chrome and a graphical session. Package installation and shell edits are optional; configuration can be retried without reinstalling.
+The installer opens a terminal wizard automatically, including when piped from `curl`. Use Up/Down (or j/k), Enter to confirm, and Esc to cancel. It lets you choose the prefix, optionally add `mz` to Bash/Zsh/Fish PATH, install missing runtime packages using apt/dnf/pacman/zypper (sudo may prompt), configure Local, Icecast and Spotify, and log into Yandex/YouTube Music. Advanced settings include FFmpeg paths, SoundFont, radio proxy/TLS/buffering and Yandex mix preferences. YouTube login needs Firefox or Chromium/Chrome and a graphical session. Package installation and shell edits are optional; configuration can be retried without reinstalling.
 
 ```sh
 # Reopen setup for an existing installation
@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 mz config
 ```
 
-The installer selects `musiczero-termux-arm64-alpha.tar.gz` and defaults to `$PREFIX/bin`, already on Termux PATH. This native Bionic build includes all four providers; the Linux/glibc archive does not run directly in Termux. Audio goes directly to Android’s system AAudio API, without PulseAudio, `pacat`, an audio daemon or JNI. Pausing, seeking, five-track history and the RU/EN TUI use the shared Rodio engine. Tray, MPRIS and systemd are unavailable on Android.
+The installer selects `musiczero-termux-arm64-alpha.tar.gz` and defaults to `$PREFIX/bin`, already on Termux PATH. This native Bionic build includes all five providers; the Linux/glibc archive does not run directly in Termux. Audio goes directly to Android’s system AAudio API, without PulseAudio, `pacat`, an audio daemon or JNI. Pausing, seeking, five-track history and the RU/EN TUI use the shared Rodio engine. Tray, MPRIS and systemd are unavailable on Android.
 
 Control playback outside the terminal: install the [Termux:API app](https://github.com/termux/termux-api#installation) from the same source as Termux, allow its notifications, and run `pkg install termux-api`. Restart with `mz start ymz` to show the track title and **Previous / Pause or Play / Next** notification buttons. Previous uses the five-track history; all providers share these controls. Button labels follow the language in `mz config`. Disable with `mz set mz notifications_enabled false` or `mz config` → player settings → Android notification controls, then restart. Missing or unresponsive APIs do not interrupt audio. These are notification actions; Bluetooth headset buttons and a system MediaSession are not implemented.
 
@@ -76,6 +76,7 @@ musiczero/
 └── modules/
     ├── ymz/                   # module.json + ymz-module
     ├── youmz/                 # module.json + youmz-module
+    ├── spotify/               # module.json + spotify-module
     ├── local/                 # module.json + local-module
     └── icecast/               # module.json + icecast-module
 ```
@@ -96,6 +97,7 @@ Provider executables also end in `.exe` on Windows. In PowerShell, use `./mz.exe
 | Linux tray/MPRIS | User D-Bus session; a desktop panel supporting StatusNotifierItem for the tray |
 | YMZ | Yandex Music account and a valid OAuth token |
 | YouMZ | YouTube Music browser login; Firefox, LibreWolf, Chromium or Chrome; `yt-dlp` on PATH for audio |
+| Spotify | Spotify Premium account, its `client_id` from a Development Mode app |
 | Local | `ffmpeg` and `ffprobe` on PATH |
 | Legacy tracker files | FFmpeg built with `libopenmpt` |
 | MIDI | `fluidsynth` on PATH and a configured SF2/SF3 SoundFont, in addition to Local's FFmpeg requirements |
@@ -199,7 +201,7 @@ mz config icecast  # Open a provider directly
 
 The built-in menu does not require Python. Use arrows or j/k to select, Enter to open/save, Esc to go back or cancel input, Ctrl+U to clear a field, and Ctrl+C to exit. Paste, Unicode, scrolling and terminal resizing are supported. “Language / Язык” switches every menu and hint between Russian and English; the choice is saved in `mz/settings.json`.
 
-The menu includes every `settings` field returned by installed modules, including new third-party fields. It covers all Local options, YMZ wave mood/variety/song language and token/login, YouMZ proxy/browser/session, playlists and all Icecast settings. Add, edit and remove stations through forms, including IDs, server URLs, mountpoints and credentials. Passwords and tokens are masked; editing another field preserves the existing password. Login opens the provider’s normal flow and returns to the menu.
+The menu includes every `settings` field returned by installed modules, including new third-party fields. It covers all Local options, YMZ wave mood/variety/song language and token/login, YouMZ proxy/browser/session, Spotify client_id/redirect_uri/bitrate/explicit and login, playlists and all Icecast settings. Add, edit and remove stations through forms, including IDs, server URLs, mountpoints and credentials. Passwords and tokens are masked; editing another field preserves the existing password. Login opens the provider’s normal flow and returns to the menu.
 
 Changes save on confirmation and are validated by the provider; errors appear inside the menu. Playlists can be selected before starting playback. Active Local/Icecast changes use IPC to discard obsolete downloads. Wave preferences require login and network access; menus and login remain available when the service is unavailable.
 
@@ -256,6 +258,27 @@ mz playlist RDMM
 | `~/.config/youmz/proxy` / `YOUMZ_PROXY` | Optional proxy; a nonempty proxy file takes precedence over the environment variable |
 
 YouMZ exposes `proxy`, `browser` and a masked `session` through `mz config youmz` and `mz settings youmz`. Use `mz set youmz <key> <value>` for scripts. A saved browser path is used unless `YOUMZ_BROWSER` overrides it. If Google rejects sign-in, check whether the account can sign in through a browser opened normally, then retry MusicZero's temporary-profile flow. Old OAuth-client error messages indicate outdated provider binaries; update the host **and** its modules.
+
+## Spotify
+
+```sh
+mz set spotify client_id <32-hex-from-dashboard>
+mz login spotify
+mz spotify
+```
+
+Create an application at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), add its Redirect URI exactly `http://127.0.0.1:8910/callback` and paste its `client_id`. `mz login spotify` opens the OAuth page (PKCE), listens on a local port for 30 seconds and saves tokens into `~/.config/mz-spotify/tokens.json` (`%APPDATA%\mz-spotify\tokens.json` on Windows, mode `0600` on Linux). Changing `client_id` invalidates the saved login — log in again.
+
+`likes` (Liked tracks), `recent` (Recently played) and `top` (Top tracks) are always available; account playlists (`playlist:<id>`) and saved albums (`album:<id>`) follow. `likes` is the default playlist. Audio is decrypted by the module's own Librespot session and handed to the player as Ogg Vorbis or MP4; FFmpeg and `yt-dlp` are not needed. The session reopens for each track, so the first track starts after a few seconds.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `client_id` | empty | 32 hexadecimal characters from the Dashboard |
+| `redirect_uri` | `http://127.0.0.1:8910/callback` | Loopback `/callback` only; must match the application |
+| `bitrate` | `320` | `96`, `160` or `320` kbit/s Vorbis |
+| `explicit` | `true` | `false` hides explicit-marked tracks |
+
+Playback requires a Spotify Premium subscription. In Development Mode, playlist items can only be listed for playlists you own or collaborate on; items of followed playlists are unavailable (Spotify Web API limitation, February 2026). The module was built against the librespot 0.8 sources and the February 2026 Web API and protocol-tested offline; live playback has not yet been verified with a real Premium account. More details: [Spotify module](modules/spotify/README.md).
 
 ## Local music folder
 
@@ -356,6 +379,7 @@ Configuration bases follow `XDG_CONFIG_HOME`/`~/.config` on Linux and `APPDATA` 
 | Language and player preferences | Config: `mz/settings.json` |
 | YMZ token | Config: `ymz/token` |
 | YouMZ session/proxy | Config: `youmz/session`, `youmz/proxy`, `youmz/browser` |
+| Spotify tokens/settings | Config: `mz-spotify/tokens.json`, `mz-spotify/settings.json` |
 | Local settings | Config: `mz-local/settings.json` |
 | Icecast stations/settings | Config: `mz-icecast/settings.json` |
 | Selected playlist for each provider | Config: `mz/<id>.playlist` |
@@ -398,7 +422,7 @@ cargo build --workspace --release --locked
 ./install.sh
 ```
 
-`install.sh` builds and installs the four official providers beside `mz`; `MUSICZERO_PREFIX` defaults to `~/.local`, and `CARGO_TARGET_DIR` is respected. `bootstrap.sh` clones a temporary checkout and invokes this installer; `MUSICZERO_REPO` and `MUSICZERO_REF` override its repository/ref.
+`install.sh` builds and installs the five official providers beside `mz`; `MUSICZERO_PREFIX` defaults to `~/.local`, and `CARGO_TARGET_DIR` is respected. `bootstrap.sh` clones a temporary checkout and invokes this installer; `MUSICZERO_REPO` and `MUSICZERO_REF` override its repository/ref.
 
 The Windows CI build disables the default tray feature; the same flag is useful for a Linux build without a tray:
 

@@ -1,7 +1,7 @@
 """Explicit account integration check; uses saved app login, never browser profiles.
 
 Run: python3 tests/check_services.py --host
-Not run in CI: requires Yandex/YouTube accounts, network and yt-dlp.
+Not run in CI: requires Yandex/YouTube/Spotify accounts, network and yt-dlp.
 """
 import argparse
 import json
@@ -42,7 +42,7 @@ def account_check(module, env, root):
         return json.loads(run([binary, *args], env))
     assert metadata('info')['id'] == module
     playlists = metadata('playlists')['playlists']
-    default = 'wave' if module == 'ymz' else 'RDMM'
+    default = {'ymz': 'wave', 'youmz': 'RDMM', 'spotify': 'likes'}[module]
     tracks = metadata('tracks', default)['tracks']
     assert tracks, f'{module}: empty default playlist'
     audio = root / (module + '-audio')
@@ -174,26 +174,30 @@ def host_check(modules, env, root, wave_tracks=0, history=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--module', choices=['ymz', 'youmz', 'both'], default='both')
+    parser.add_argument('--module', choices=['ymz', 'youmz', 'spotify', 'both'], default='both')
     parser.add_argument('--host', action='store_true', help='also check host playback/seeking with ALSA null')
     parser.add_argument('--wave-tracks', type=int, default=0,
                         help='with --host, start this many distinct real wave tracks using next (at least 6)')
     parser.add_argument('--history', action='store_true', help='with --host, replay real previous tracks')
     args = parser.parse_args()
-    if args.wave_tracks and (args.wave_tracks < 6 or not args.host or args.module == 'youmz'):
+    if args.wave_tracks and (args.wave_tracks < 6 or not args.host or args.module != 'ymz'):
         parser.error('--wave-tracks requires --host, YMZ and a count of at least 6')
     if args.history and not args.host:
         parser.error('--history requires --host')
     modules = ['ymz', 'youmz'] if args.module == 'both' else [args.module]
     original = pathlib.Path(os.environ.get('XDG_CONFIG_HOME') or pathlib.Path.home() / '.config')
+    credentials = {'ymz': ('ymz', ['token']),
+                   'youmz': ('youmz', ['session', 'proxy']),
+                   'spotify': ('mz-spotify', ['tokens.json', 'settings.json'])}
     with tempfile.TemporaryDirectory(prefix='mz-services-') as tmp:
         root = pathlib.Path(tmp)
         for module in modules:
-            target = root / 'config' / module
+            source_dir, names = credentials[module]
+            target = root / 'config' / source_dir
             target.mkdir(parents=True)
             # Only existing app credentials, not cookie exports or browser profile data.
-            for name in (['token'] if module == 'ymz' else ['session', 'proxy']):
-                source = original / module / name
+            for name in names:
+                source = original / source_dir / name
                 if source.is_file():
                     shutil.copy2(source, target / name)
                     (target / name).chmod(0o600)

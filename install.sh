@@ -22,7 +22,7 @@ esac
 
 mkdir -p "$prefix/bin"
 install -m 755 "$build_dir/release/mz" "$prefix/bin/mz"
-for module in ymz youmz local icecast; do
+for module in ymz youmz local icecast spotify; do
     mkdir -p "$prefix/bin/modules/$module"
     install -m 644 "$root/modules/$module/module.json" "$prefix/bin/modules/$module/module.json"
     if [ -f "$root/modules/$module/README.md" ]; then
@@ -32,7 +32,7 @@ for module in ymz youmz local icecast; do
 done
 
 echo "Установлено в $prefix/bin"
-echo "Запуск: mz modules; mz start <ymz|youmz|local|icecast>"
+echo "Запуск: mz modules; mz start <ymz|youmz|spotify|local|icecast>"
 echo "Управление: mz toggle, mz next, mz status, mz playlist, mz switch youmz."
 echo "Настройки, трей и автозапуск: mz config"
 if [ "${MUSICZERO_SETUP:-1}" != "0" ] && [ -t 0 ] && [ -t 1 ]; then

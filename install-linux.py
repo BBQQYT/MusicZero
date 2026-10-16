@@ -50,6 +50,9 @@ FILES = (
     ("musiczero/modules/ymz/ymz-module", "modules/ymz/ymz-module", 0o755),
     ("musiczero/modules/youmz/module.json", "modules/youmz/module.json", 0o644),
     ("musiczero/modules/youmz/youmz-module", "modules/youmz/youmz-module", 0o755),
+    ("musiczero/modules/spotify/module.json", "modules/spotify/module.json", 0o644),
+    ("musiczero/modules/spotify/README.md", "modules/spotify/README.md", 0o644),
+    ("musiczero/modules/spotify/spotify-module", "modules/spotify/spotify-module", 0o755),
     ("musiczero/modules/local/module.json", "modules/local/module.json", 0o644),
     ("musiczero/modules/local/README.md", "modules/local/README.md", 0o644),
     ("musiczero/modules/local/local-module", "modules/local/local-module", 0o755),
@@ -101,7 +104,7 @@ def install(archive, destination):
             names = bundle.getnames()
             if len(names) != len(set(names)):
                 raise RuntimeError("Duplicate archive entries")
-            absent = {module for module in ("local", "icecast")
+            absent = {module for module in ("local", "icecast", "spotify")
                       if f"musiczero/modules/{module}/module.json" not in names}
             for index, (source_name, target_name, mode) in enumerate(FILES):
                 if any(source_name.startswith(f"musiczero/modules/{module}/") for module in absent):
@@ -282,7 +285,7 @@ def run_command(args, *, capture=False):
 
 def dependencies(ui, module):
     needed = {"local": ["ffmpeg", "ffprobe"], "icecast": ["ffmpeg"],
-              "youmz": ["yt-dlp", "ffmpeg"], "ymz": []}[module]
+              "youmz": ["yt-dlp", "ffmpeg"], "spotify": [], "ymz": []}[module]
     missing = [name for name in needed if not shutil.which(name)]
     if not missing:
         return True
@@ -361,10 +364,11 @@ def configure(ui, executable):
         print("Этот релиз ещё не содержит `mz config`. Для TUI обновите плеер после публикации новой сборки.",
               flush=True)
     listing = run_command([executable, "modules"], capture=True)
-    available = [module for module in ("local", "icecast", "ymz", "youmz")
+    available = [module for module in ("local", "icecast", "ymz", "youmz", "spotify")
                  if any(line.startswith(module + " —") for line in listing.splitlines())]
     labels = {"local": "Local music folder", "icecast": "Icecast radio",
-              "ymz": "Yandex Music login", "youmz": "YouTube Music browser login"}
+              "ymz": "Yandex Music login", "youmz": "YouTube Music browser login",
+              "spotify": "Spotify client_id + Premium login"}
     if is_termux():
         labels['youmz'] = "YouTube Music session / Сессия YouTube"
     if desktop_setup:
@@ -425,6 +429,11 @@ def configure(ui, executable):
                 ui.notice("YouTube Music / Termux alpha", "Browser login requires desktop Firefox/Chromium.\nВход через браузер требует настольного Firefox/Chromium.\n" +
                           "Use the manual session field in mz config youmz.\nВведите сессию вручную в mz config youmz.")
                 edit_settings(ui, executable, module)
+            elif module == "spotify":
+                client_id = ui.text("Spotify client_id (32 hex from Dashboard)").strip()
+                run_command([executable, "set", module, "client_id", client_id], capture=True)
+                print("Follow the login instructions below.", flush=True)
+                run_command([executable, "login", module])
             else:
                 print("Follow the login instructions below.", flush=True)
                 run_command([executable, "login", module])
