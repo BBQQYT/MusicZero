@@ -160,6 +160,8 @@ async fn main() -> Result<()> {
                             }
                         }
                         result.sequence
+                    } else if selected == "likes" {
+                        client.get_liked_tracks().await?
                     } else {
                         let kind = selected
                             .strip_prefix("playlist:")

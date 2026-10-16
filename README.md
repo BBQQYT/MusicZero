@@ -221,6 +221,8 @@ mz settings ymz
 mz set ymz mood calm
 ```
 
+`likes` is the account’s **Liked tracks** playlist ("Мне нравится"). Select it with `mz playlist likes` or from the playlist menu. Tracks follow the service’s library order; unavailable entries omitted by the service are skipped.
+
 `wave` is the default playlist. Account playlists use IDs such as `playlist:12345`; choose an ID returned by `mz playlists`, or its list number. Wave settings expose `mood`, `diversity` and `language`; their values are accepted or rejected by the service.
 
 The token lives in `~/.config/ymz/token` on Linux or `%APPDATA%\ymz\token` on Windows. A saved token takes precedence over `YM_TOKEN`; the variable is a fallback when no usable token file exists.

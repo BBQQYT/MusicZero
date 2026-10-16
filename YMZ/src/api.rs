@@ -25,6 +25,7 @@ pub struct TrackEntry {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Track {
+    #[serde(deserialize_with = "deserialize_id")]
     pub id: String,
     pub title: String,
     pub artists: Vec<Artist>,
@@ -67,6 +68,43 @@ struct PlaylistResponse {
 #[derive(Deserialize)]
 struct Playlist {
     tracks: Vec<TrackEntry>,
+}
+
+fn deserialize_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Text(String),
+        Number(u64),
+    }
+    Ok(match Id::deserialize(deserializer)? {
+        Id::Text(value) => value,
+        Id::Number(value) => value.to_string(),
+    })
+}
+
+#[derive(Deserialize)]
+struct LikesResponse {
+    result: LikesResult,
+}
+#[derive(Deserialize)]
+struct LikesResult {
+    library: LikedLibrary,
+}
+#[derive(Deserialize)]
+struct LikedLibrary {
+    tracks: Vec<LikedTrack>,
+}
+#[derive(Deserialize)]
+struct LikedTrack {
+    #[serde(deserialize_with = "deserialize_id")]
+    id: String,
+    #[serde(rename = "albumId")]
+    album_id: Option<String>,
+}
+#[derive(Deserialize)]
+struct TracksResponse {
+    result: Vec<Track>,
 }
 
 #[derive(Clone, Debug)]
@@ -155,7 +193,10 @@ impl YandexClient {
             .error_for_status()?
             .json::<PlaylistsResponse>()
             .await?;
-        let mut result = vec![("wave".into(), "Моя волна".into())];
+        let mut result = vec![
+            ("wave".into(), "Моя волна".into()),
+            ("likes".into(), "Мне нравится".into()),
+        ];
         result.extend(
             response
                 .result
@@ -179,6 +220,64 @@ impl YandexClient {
             .json::<PlaylistResponse>()
             .await?;
         Ok(response.result.tracks)
+    }
+
+    pub async fn get_liked_tracks(
+        &self,
+    ) -> Result<Vec<TrackEntry>, Box<dyn std::error::Error + Send + Sync>> {
+        let uid = self.uid().await?;
+        self.liked_tracks_at(BASE_URL, uid).await
+    }
+
+    async fn liked_tracks_at(
+        &self,
+        base_url: &str,
+        uid: u64,
+    ) -> Result<Vec<TrackEntry>, Box<dyn std::error::Error + Send + Sync>> {
+        let likes = self
+            .client
+            .get(format!("{base_url}/users/{uid}/likes/tracks"))
+            .query(&[("if-modified-since-revision", "0")])
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<LikesResponse>()
+            .await?
+            .result
+            .library
+            .tracks;
+        let mut entries = Vec::with_capacity(likes.len());
+        for batch in likes.chunks(100) {
+            let ids = batch
+                .iter()
+                .map(|track| match &track.album_id {
+                    Some(album) if !album.is_empty() => format!("{}:{album}", track.id),
+                    _ => track.id.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let response = self
+                .client
+                .post(format!("{base_url}/tracks"))
+                .form(&[("track-ids", ids.as_str()), ("with-positions", "false")])
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<TracksResponse>()
+                .await?;
+            let mut tracks: std::collections::HashMap<_, _> = response
+                .result
+                .into_iter()
+                .map(|track| (track.id.clone(), track))
+                .collect();
+            // Metadata responses may reorder or omit unavailable tracks.
+            for liked in batch {
+                if let Some(track) = tracks.remove(&liked.id) {
+                    entries.push(TrackEntry { track: Some(track) });
+                }
+            }
+        }
+        Ok(entries)
     }
 
     pub async fn set_wave_settings(
@@ -519,6 +618,129 @@ mod tests {
     fn malformed_token_returns_error() {
         assert!(YandexClient::new("bad\r\ntoken").is_err());
     }
+    fn mock_responses(
+        responses: Vec<(String, String, u16, String)>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (expected_path, expected_body, status, body) in responses {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let end = loop {
+                    let mut block = [0; 1024];
+                    let count = socket.read(&mut block).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&block[..count]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
+                assert!(headers.starts_with(&expected_path), "{headers}");
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")
+                            .map(|v| v.parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while bytes.len() < end + length {
+                    let mut block = [0; 1024];
+                    let count = socket.read(&mut block).unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&block[..count]);
+                }
+                assert_eq!(
+                    std::str::from_utf8(&bytes[end..end + length]).unwrap(),
+                    expected_body
+                );
+                write!(socket, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn likes_fetches_batches_and_preserves_library_order() {
+        use serde_json::json;
+        let likes = (1..=102)
+            .map(|id| json!({"id":id,"albumId":"7"}))
+            .collect::<Vec<_>>();
+        let mut responses = vec![(
+            "GET /users/42/likes/tracks?if-modified-since-revision=0 ".into(),
+            String::new(),
+            200,
+            json!({"result":{"library":{"tracks":likes}}}).to_string(),
+        )];
+        for (start, end) in [(1, 100), (101, 102)] {
+            let ids = (start..=end)
+                .map(|id| format!("{id}:7"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let tracks = (start..=end)
+                .rev()
+                .filter(|id| *id != 102)
+                .map(|id| json!({"id":id,"title":format!("Track {id}"),"artists":[]}))
+                .collect::<Vec<_>>();
+            responses.push((
+                "POST /tracks ".into(),
+                format!(
+                    "track-ids={}&with-positions=false",
+                    ids.replace(':', "%3A").replace(',', "%2C")
+                ),
+                200,
+                json!({"result":tracks}).to_string(),
+            ));
+        }
+        let (base, server) = mock_responses(responses);
+        let entries = YandexClient::new("test")
+            .unwrap()
+            .liked_tracks_at(&base, 42)
+            .await
+            .unwrap();
+        let ids = entries
+            .into_iter()
+            .map(|entry| entry.track.unwrap().id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, (1..=101).map(|id| id.to_string()).collect::<Vec<_>>());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn likes_handles_empty_library_and_http_errors() {
+        let (base, server) = mock_responses(vec![(
+            "GET /users/42/likes/tracks?if-modified-since-revision=0 ".into(),
+            String::new(),
+            200,
+            r#"{"result":{"library":{"tracks":[]}}}"#.into(),
+        )]);
+        assert!(YandexClient::new("test")
+            .unwrap()
+            .liked_tracks_at(&base, 42)
+            .await
+            .unwrap()
+            .is_empty());
+        server.join().unwrap();
+        let (base, server) = mock_responses(vec![(
+            "GET /users/42/likes/tracks?if-modified-since-revision=0 ".into(),
+            String::new(),
+            401,
+            "{}".into(),
+        )]);
+        assert!(YandexClient::new("test")
+            .unwrap()
+            .liked_tracks_at(&base, 42)
+            .await
+            .is_err());
+        server.join().unwrap();
+    }
+
     #[tokio::test]
     async fn wave_continuation_and_feedback_use_the_rotor_wire_format() {
         use std::io::{Read, Write};
