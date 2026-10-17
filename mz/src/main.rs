@@ -11,6 +11,10 @@ mod seek;
 mod service;
 #[cfg(all(feature = "tray", target_os = "linux"))]
 mod tray;
+#[cfg(target_os = "windows")]
+mod smtc;
+#[cfg(target_os = "windows")]
+mod tray_win;
 mod tui;
 
 use plugin::{discover, Module};
@@ -18,6 +22,10 @@ use serde_json::{json, Value};
 use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+fn has_tray() -> bool {
+    cfg!(all(feature = "tray", target_os = "linux")) || cfg!(target_os = "windows")
+}
 
 fn module<'a>(modules: &'a [Module], id: &str) -> Result<&'a Module> {
     modules
@@ -83,7 +91,7 @@ fn help() {
   mz playlist <id|номер>  Выбрать плейлист\n\
   mz settings [модуль]    Настройки сервиса\n\
   mz config [модуль]      TUI настроек / Settings TUI (RU / EN)\n\
-  mz tray [on|off]        Значок трея при следующем запуске (Linux)\n\
+  mz tray [on|off]        Значок трея при следующем запуске (Linux / Windows)\n\
   mz service install <модуль> Установить сервис с автозапуском (Linux)\n\
   mz service start|stop|restart|status|remove Управление сервисом\n\
   mz set [модуль] <ключ> <значение> Изменить настройку\n\n\
@@ -136,9 +144,18 @@ async fn start(modules: Vec<Module>, id: &str, managed: bool) -> Result<()> {
         return Ok(());
     }
     println!("▶ {}. Ctrl+C для выхода.", modules[index].manifest.name);
+    let settings = config::Settings::load().ok();
     #[cfg(all(feature = "tray", target_os = "linux"))]
-    if config::Settings::load()?.tray_enabled {
+    if settings.as_ref().is_some_and(|value| value.tray_enabled) {
         tray::spawn(modules.clone());
+    }
+    #[cfg(target_os = "windows")]
+    if settings.as_ref().is_some_and(|value| value.tray_enabled) {
+        tray_win::spawn(modules.clone());
+    }
+    #[cfg(target_os = "windows")]
+    if settings.as_ref().is_some_and(|value| value.media_keys_enabled) {
+        smtc::spawn();
     }
     player::run(modules, index).await
 }
@@ -167,8 +184,8 @@ async fn main() -> Result<()> {
         Some("config" | "tui") => return tui::run(args.get(1).map(String::as_str)).await,
         Some("tray") => {
             if let Some(value) = args.get(1) {
-                if !cfg!(all(feature = "tray", target_os = "linux")) {
-                    return Err("Этот файл mz собран без поддержки трея Linux".into());
+                if !has_tray() {
+                    return Err("Этот файл mz собран без поддержки трея".into());
                 }
                 let mut settings = preferences.clone();
                 settings.set(
@@ -190,8 +207,7 @@ async fn main() -> Result<()> {
             } else {
                 println!(
                     "{}",
-                    if preferences.tray_enabled && cfg!(all(feature = "tray", target_os = "linux"))
-                    {
+                    if preferences.tray_enabled && has_tray() {
                         "on"
                     } else {
                         "off"

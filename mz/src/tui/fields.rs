@@ -48,6 +48,7 @@ pub fn label(lang: Language, key: &str) -> &str {
             "Кнопки в уведомлении Android",
             "Android notification controls",
         ),
+        "media_keys_enabled" => ("Медиаклавиши Windows", "Windows media keys"),
         _ => return key,
     };
     lang.text(ru, en)
@@ -80,8 +81,9 @@ pub fn hint(lang: Language, key: &str) -> &str {
         "modules_dir" => ("Пусто — modules рядом с mz. MZ_MODULES_DIR имеет приоритет. Плеер нужно перезапустить.", "Empty uses modules beside mz. MZ_MODULES_DIR takes precedence. Restart the player."),
         "log_filter" => ("Пусто — warn,mz=info. Например debug или warn. RUST_LOG имеет приоритет; нужен перезапуск.", "Empty uses warn,mz=info. Examples: debug, warn. RUST_LOG takes precedence; restart required."),
         "temp_dir" => ("Существующая папка. Пусто — системная. При пустом значении учитываются TMPDIR/TMP/TEMP.", "Existing folder. Empty uses the system default. When empty, uses TMPDIR/TMP/TEMP."),
-        "tray_enabled" => ("Значок и меню в трее Linux. Изменение применяется после перезапуска плеера.", "Linux tray icon and menu. Restart the player to apply."),
+        "tray_enabled" => ("Значок и меню в трее Linux или Windows. Изменение применяется после перезапуска плеера.", "Linux or Windows tray icon and menu. Restart the player to apply."),
         "notifications_enabled" => ("Назад, пауза и вперёд вне консоли. Нужны приложение Termux:API и pkg install termux-api. Перезапустите плеер.", "Previous, pause and next outside the terminal. Requires the Termux:API app and pkg install termux-api. Restart the player."),
+        "media_keys_enabled" => ("Глобальные медиаклавиши и панель Windows над треком. Изменение применяется после перезапуска плеера.", "Global Windows media keys and the media panel over the track. Restart the player to apply."),
         _ => ("Enter — изменить; изменения сохраняются сразу.", "Enter to edit; changes are saved immediately."),
     };
     lang.text(ru, en)

@@ -30,6 +30,7 @@ pub struct Settings {
     pub temp_dir: String,
     pub tray_enabled: bool,
     pub notifications_enabled: bool,
+    pub media_keys_enabled: bool,
     pub service_module: String,
 }
 impl Default for Settings {
@@ -41,6 +42,7 @@ impl Default for Settings {
             temp_dir: String::new(),
             tray_enabled: true,
             notifications_enabled: true,
+            media_keys_enabled: true,
             service_module: "ymz".into(),
         }
     }
@@ -90,6 +92,7 @@ impl Settings {
             "notifications_enabled" => {
                 self.notifications_enabled = mz_module_support::boolean(value)?
             }
+            "media_keys_enabled" => self.media_keys_enabled = mz_module_support::boolean(value)?,
             "service_module" => {
                 if text.is_empty()
                     || text.len() > 64
@@ -125,13 +128,16 @@ mod tests {
             serde_json::from_str(r#"{"language":"en","log_filter":"warn"}"#).unwrap();
         assert!(settings.tray_enabled);
         assert!(settings.notifications_enabled);
+        assert!(settings.media_keys_enabled);
         settings.set("notifications_enabled", "false").unwrap();
         settings.set("tray_enabled", "false").unwrap();
+        settings.set("media_keys_enabled", "false").unwrap();
         settings.set("service_module", "youmz").unwrap();
         let loaded: Settings =
             serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
         assert!(!loaded.tray_enabled);
         assert!(!loaded.notifications_enabled);
+        assert!(!loaded.media_keys_enabled);
         assert_eq!(loaded.service_module, "youmz");
         assert_eq!(loaded.language, Language::En);
         assert!(settings.set("service_module", "../../evil").is_err());

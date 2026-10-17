@@ -168,8 +168,11 @@ async fn host_menu(ui: &mut Ui, settings: &mut Settings) -> Result<()> {
     if cfg!(target_os = "android") {
         keys.push("notifications_enabled");
     }
-    if cfg!(all(feature = "tray", target_os = "linux")) {
+    if cfg!(all(feature = "tray", target_os = "linux")) || cfg!(target_os = "windows") {
         keys.push("tray_enabled");
+    }
+    if cfg!(target_os = "windows") {
+        keys.push("media_keys_enabled");
     }
     let mut selected = 0;
     loop {
