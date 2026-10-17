@@ -62,11 +62,39 @@ mz config
 
 Сборка на устройстве: `pkg install rust clang make pkg-config git`, затем клонируйте репозиторий и выполните `./install.sh` (libclang входит в пакет `clang`). Для кросс-сборки на Linux x64: установите `libclang-dev`, выполните `rustup target add aarch64-linux-android`, задайте `ANDROID_NDK_HOME` с NDK r27+ и выполните `./scripts/build-termux.sh`. Проверка результата: `python3 tests/check_android.py`.
 
-### Ручная установка и Windows
+### Приложение для Android
 
-Для ноутбуков с Windows 11 ARM64 используйте `musiczero-windows-arm64-alpha.zip`. В архиве нативные ARM64-файлы; сборка и тесты выполняются на Windows ARM. Для x64 сохраняется `musiczero-windows-x64.zip`. Windows alpha поддерживает CLI и TUI настроек на русском/английском; трей, MPRIS и systemd доступны только в Linux. Для модулей, которым нужны FFmpeg/yt-dlp, эти программы должны быть в PATH.
+`musiczero-android-arm64.apk` содержит тот же движок и все пять модулей в нативном Compose-приложении (Android 8+, ARM64):
 
-Скачайте архив для своей системы из [Releases](https://github.com/BBQQYT/MusicZero/releases) и распакуйте **папку `musiczero` целиком**, сохранив модули рядом с плеером:
+- Material 3 с динамическими акцентами Android 12+; обложка, полоса перемотки, назад/пауза/вперёд, ±15 секунд, плейлисты, история и экран токена Яндекс Музыки.
+- `MediaLibraryService` отражает воспроизведение на экран блокировки, медиапанель и Android Auto: в машине видны плейлисты активного модуля, выбор запускает воспроизведение.
+- При первом запуске приложение распаковывает бинарники движка и манифесты модулей, затем запускает плеер дочерним процессом с HOME, XDG-каталогами и `MZ_MODULES_DIR` внутри хранилища приложения. Движок работает под медиа-уведомлением; свайп уведомления останавливает плеер.
+
+Установите APK из Releases (sideload; подпись — CI debug-ключ). Настройки хранятся в приватном хранилище приложения — конфигурация из Termux/десктопа не переносится; токен Яндекса вставляется в приложении. Ограничения относительно десктопа: в модулях local/icecast нет FFmpeg, вход YouMZ через браузер и вход Spotify недоступны из песочницы приложения, поэтому после предварительной настройки токенов запускайте YouMZ/Spotify через приложение; local видит только свою папку приложения.
+
+### Установка через Windows-установщик
+
+Скачайте `musiczero-windows-x64.zip` (или `musiczero-windows-arm64-alpha.zip` для ноутбуков на Snapdragon) из [Releases](https://github.com/BBQQYT/MusicZero/releases), распакуйте и запустите установщик в PowerShell:
+
+```powershell
+# Установка или обновление: копирует musiczero\ в %LOCALAPPDATA%\MusicZero,
+# добавляет путь в пользовательский PATH (идемпотентно), опционально -Shortcut
+.\install-windows.ps1
+# Проверить комплектность архива и выйти
+.\install-windows.ps1 -Check
+# Удалить файлы, запись PATH и ярлык
+.\install-windows.ps1 -Uninstall
+```
+
+`-Source <путь>` устанавливает другой архив или папку; `-Shortcut` создаёт значок в меню «Пуск» для `mz start local`.
+
+В Windows-сборке есть всё, что в Linux, плюс нативная интеграция:
+
+- **Трей** — нативная иконка Win32 с тем же меню, что в треи Linux: пауза/воспроизведение, следующий/предыдущий трек, пять последних треков, список модулей и плейлистов, выход. Трей подчиняется `tray_enabled`.
+- **System Media Transport Controls (SMTC)** — медиаклавиши, экран блокировки и медиапанель Windows управляют воспроизведением; играющий трек показывает название, исполнителя и обложку. Отключение клавиш: `mz set mz media_keys_enabled false`.
+- CLI, IPC и настройки на русском/английском полностью совпадают. Для модулей FFmpeg/yt-dlp должны быть в PATH.
+
+Ручная установка: распакуйте **папку `musiczero` целиком**, сохранив модули рядом с `mz.exe`:
 
 ```text
 musiczero/
@@ -94,6 +122,7 @@ musiczero/
 | --- | --- |
 | Плеер | Работающий аудиовывод; в Linux — ALSA либо настроенный интерфейс ALSA к PipeWire/PulseAudio |
 | Плеер Termux alpha | Android 8+ ARM64, системный AAudio без аудиосервера; без трея и systemd |
+| Приложение Android | Android 8+ ARM64; установка движка автоматическая; FFmpeg для local/icecast отсутствует |
 | Трей и MPRIS в Linux | Пользовательская сессия D-Bus; для трея — панель с поддержкой StatusNotifierItem |
 | YMZ | Аккаунт Яндекс Музыки и действующий OAuth-токен |
 | YouMZ | Вход через Firefox, LibreWolf, Chromium или Chrome; для аудио — `yt-dlp` в PATH |
@@ -103,7 +132,7 @@ musiczero/
 | MIDI | Дополнительно `fluidsynth` в PATH и настроенный банк SF2/SF3 |
 | Icecast | `ffmpeg` в PATH и прямой HTTP(S) mountpoint радиостанции |
 
-FFmpeg, yt-dlp, браузеры и банки SoundFont не входят в поставку MusicZero. Для Local и Icecast можно указать пути к программам в настройках. При недоступной интеграции с рабочим столом управление через CLI остаётся доступным; ошибки MPRIS выводятся в журнал. В Windows пока нет собственного трея и системных медиаклавиш.
+FFmpeg, yt-dlp, браузеры и банки SoundFont не входят в поставку MusicZero. Для Local и Icecast можно указать пути к программам в настройках. При недоступной интеграции с рабочим столом управление через CLI остаётся доступным; ошибки MPRIS выводятся в журнал. В Windows вместо MPRIS/systemd своя интеграция: трей и SMTC-медиаклавиши.
 
 ## Быстрый запуск и управление
 
@@ -410,7 +439,9 @@ TMPDIR="$HOME/.cache/musiczero-tmp" mz local
 | MIDI не воспроизводится | FluidSynth, читаемый SoundFont и корректный MIDI-файл |
 | Радио не подключается или обрывается | Прямой mountpoint, авторизация, сеть/прокси, сообщения FFmpeg, тайм-аут и переподключение; CA для собственного HTTPS |
 | Нет звука | Аудиоустройство и ALSA; даже с `--no-default-features` требуется аудиовывод |
-| Нет трея или MPRIS | Пользовательская сессия D-Bus и поддержка панели; в Windows эти функции отсутствуют |
+| Нет трея или MPRIS | Пользовательская сессия D-Bus и поддержка панели; в Windows вместо этого свой трей и SMTC |
+| В Windows пропали медиаклавиши | Настройка `media_keys_enabled`; SMTC требует оконной сессии, после изменения нужен перезапуск |
+| Движок Android не стартует | В APK должны быть jniLibs (у CI-сборок есть); загляните в `cache/mz.log` хранилища приложения |
 | Команда сообщает, что плеер не запущен | Сначала запустить источник; проверить одинаковый runtime-каталог и окружение |
 
 ## Сборка и проверка
@@ -424,7 +455,7 @@ cargo build --workspace --release --locked
 
 `install.sh` собирает и устанавливает пять официальных модулей рядом с `mz`; `MUSICZERO_PREFIX` по умолчанию равен `~/.local`, а `CARGO_TARGET_DIR` учитывается. `bootstrap.sh` клонирует временную копию репозитория и запускает установщик; `MUSICZERO_REPO` и `MUSICZERO_REF` задают репозиторий и ветку/тег.
 
-Сборка Windows в CI отключает стандартную возможность трея. Этот же параметр позволяет собрать Linux-версию без трея:
+Windows собирается со всеми стандартными возможностями: трей и SMTC — код первого уровня в `mz/src/tray_win.rs` и `mz/src/smtc.rs`, работу которых обеспечивает крейт `windows`. Сборка без стандартных возможностей по-прежнему нужна для Linux-версии без трея:
 
 ```sh
 cargo build --workspace --release --no-default-features --locked
@@ -439,6 +470,15 @@ cargo build --workspace --release --no-default-features --locked
 | `Local` / `local` | Модуль `local-module`: сканирование, метаданные и аудио |
 | `Icecast` / `icecast` | Модуль `icecast-module`: станции, настройки и live PCM |
 | `ModuleSupport` / `mz-module-support` | Общие настройки модулей, пути и запуск FFmpeg |
+| `android/` | Compose-интерфейс, media3-сервис и подготовка движка для Android-APK |
+
+Упаковка Windows: `musiczero-windows-*.zip` вместе с `install-windows.ps1`. Android-APK (все пять модулей, Android 8+ ARM64) собирается на Linux через NDK и Gradle:
+
+```sh
+rustup target add aarch64-linux-android
+export ANDROID_NDK_HOME=/path/to/android-ndk-r27
+./scripts/build-android.sh      # даст dist/musiczero-android-arm64.apk
+```
 
 ```sh
 cargo test --workspace --locked
@@ -475,7 +515,7 @@ python3 tests/check_services.py --module ymz --host --wave-tracks 15
 python3 tests/check_services.py --host --wave-tracks 7 --history
 ```
 
-CI собирает Linux x64 и Windows x64. Push в `main`/`master` публикует предварительный релиз `build-<номер запуска>` после успешной сборки обеих платформ; теги `v*` создают версионные релизы. Точные условия и упаковка: [.github/workflows/ci.yml](.github/workflows/ci.yml). Лицензия: [LICENSE](LICENSE).
+CI собирает Linux x64, Windows x64, alpha для Windows ARM64, Termux-alpha и Android-APK. Push в `main`/`master` публикует предварительный релиз `build-<номер запуска>` после успешной сборки всех платформ; теги `v*` создают версионные релизы. Точные условия и упаковка: [.github/workflows/ci.yml](.github/workflows/ci.yml). Лицензия: [LICENSE](LICENSE).
 
 ## Написать свой модуль
 

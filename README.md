@@ -62,11 +62,39 @@ Rerun the installer to upgrade from an older PulseAudio alpha; saved tokens and 
 
 To build on the device: `pkg install rust clang make pkg-config git`, clone this repository and run `./install.sh` (`clang` includes libclang). To cross-build on Linux x64: install `libclang-dev`, run `rustup target add aarch64-linux-android`, set `ANDROID_NDK_HOME` to NDK r27+, then run `./scripts/build-termux.sh`. Inspect the result with `python3 tests/check_android.py`.
 
-### Manual installation and Windows
+### Android app
 
-For Windows 11 ARM64 laptops, use `musiczero-windows-arm64-alpha.zip`. It contains native ARM64 executables and is built/tested on a Windows ARM runner; x64 users should keep using `musiczero-windows-x64.zip`. Windows alpha supports CLI and the RU/EN configuration TUI; tray, MPRIS and systemd remain Linux-only. FFmpeg/yt-dlp must be available on PATH for the providers that need them.
+`musiczero-android-arm64.apk` bundles the same engine and all five providers inside a native Compose app (Android 8+ ARM64):
 
-Download the appropriate archive from [Releases](https://github.com/BBQQYT/MusicZero/releases) and extract the **entire `musiczero` folder**, preserving the modules beside the host:
+- Material 3 UI with Material You dynamic accents on Android 12+; cover art, seek bar, previous/play/next, ±15 s, playlist and history sheets, a Yandex Music token sheet.
+- A `MediaLibraryService` session mirrors playback to the lock screen, the media panel and Android Auto: Audio shows the active module's playlists and starts one from the car.
+- First start unpacks the bundled Rust binaries and the module manifests, then runs the player as a child process with HOME, XDG paths and `MZ_MODULES_DIR` inside app storage. The engine keeps running under the media notification; closing the notification stops the player.
+
+Install the APK from Releases (sideload; it is signed with the CI debug key). Control files live in the app's private storage — `%APPDATA%`-style settings do not carry over from Termux/desktop; the Yandex token can be pasted in the app. Restrictions compared with desktop: local/icecast modules lack FFmpeg, YouMZ browser login and Spotify login are CLI-only paths that cannot leave the app sandbox yet, so launch YouMZ/Spotify through the app only after preconfiguring tokens, and the local module sees only the app's private folder.
+
+### Windows installer
+
+Download `musiczero-windows-x64.zip` (or `musiczero-windows-arm64-alpha.zip` for Snapdragon laptops) from [Releases](https://github.com/BBQQYT/MusicZero/releases), extract it and run the installer from PowerShell:
+
+```powershell
+# Install or update: copies musiczero\ into %LOCALAPPDATA%\MusicZero,
+# adds it to the user PATH (idempotent), optionally -Shortcut
+.\install-windows.ps1
+# Verify the package layout and exit
+.\install-windows.ps1 -Check
+# Remove files, the PATH entry and the shortcut
+.\install-windows.ps1 -Uninstall
+```
+
+`-Source <path>` installs another archive or folder; `-Shortcut` creates a Start Menu icon for `mz start local`.
+
+The Windows host ships the same features as Linux plus native integrations:
+
+- **Tray** — a native Win32 tray icon with the same menu as the Linux tray: pause/play, next/previous, the five most recent tracks, the provider list and playlists, quit. The tray honors `tray_enabled`.
+- **System Media Transport Controls (SMTC)** — media keys, the lock screen and the Windows media panel control playback; an ongoing track shows title, artist and artwork. Timeline and buttons follow the player; disable the keys with `mz set mz media_keys_enabled false`.
+- CLI, IPC and the RU/EN TUI are identical. FFmpeg/yt-dlp must be on PATH for the providers that need them.
+
+For a manual install, extract the **entire `musiczero` folder**, preserving modules beside `mz.exe`:
 
 ```text
 musiczero/
@@ -94,6 +122,7 @@ Provider executables also end in `.exe` on Windows. In PowerShell, use `./mz.exe
 | --- | --- |
 | Host | Working audio output. Linux needs ALSA or a configured ALSA interface to PipeWire/PulseAudio |
 | Termux alpha host | Android 8+ ARM64, system AAudio without an audio daemon; no desktop tray or systemd |
+| Android app | Android 8+ ARM64; installs the engine automatically; no FFmpeg for local/icecast |
 | Linux tray/MPRIS | User D-Bus session; a desktop panel supporting StatusNotifierItem for the tray |
 | YMZ | Yandex Music account and a valid OAuth token |
 | YouMZ | YouTube Music browser login; Firefox, LibreWolf, Chromium or Chrome; `yt-dlp` on PATH for audio |
@@ -103,7 +132,7 @@ Provider executables also end in `.exe` on Windows. In PowerShell, use `./mz.exe
 | MIDI | `fluidsynth` on PATH and a configured SF2/SF3 SoundFont, in addition to Local's FFmpeg requirements |
 | Icecast | `ffmpeg` on PATH and an HTTP(S) station mountpoint |
 
-FFmpeg, yt-dlp, browsers and SoundFonts are not bundled with MusicZero. Local and Icecast can use configured executable paths instead of PATH. Linux desktop integration can be unavailable while CLI playback continues; MPRIS failures are logged. Windows currently uses CLI control, without a native tray or system media keys.
+FFmpeg, yt-dlp, browsers and SoundFonts are not bundled with MusicZero. Local and Icecast can use configured executable paths instead of PATH. Linux desktop integration can be unavailable while CLI playback continues; MPRIS failures are logged. Windows provides the tray and SMTC media keys instead of MPRIS/systemd.
 
 ## Quick start and controls
 
@@ -410,7 +439,9 @@ TMPDIR="$HOME/.cache/musiczero-tmp" mz local
 | MIDI does not play | FluidSynth, a readable configured SoundFont and valid MIDI data |
 | Radio fails or disconnects | Direct mountpoint URL, auth, network/proxy, FFmpeg output, timeout and reconnect settings; CA file for private HTTPS |
 | No sound | System audio device/ALSA setup; runtime audio output is still needed with `--no-default-features` |
-| No tray/MPRIS | User D-Bus session and panel support; unavailable on Windows |
+| No tray/MPRIS | User D-Bus session and panel support; Windows uses its own tray and SMTC instead |
+| Windows media keys absent | `media_keys_enabled` setting; SMTC needs a windowed session, restart the host after changes |
+| Android engine never starts | The APK must bundle jniLibs (CI builds do); check `cache/mz.log` inside the app storage |
 | Control says host is not running | Start a provider first and use the same runtime directory/environment |
 
 ## Build and verification
@@ -424,7 +455,7 @@ cargo build --workspace --release --locked
 
 `install.sh` builds and installs the five official providers beside `mz`; `MUSICZERO_PREFIX` defaults to `~/.local`, and `CARGO_TARGET_DIR` is respected. `bootstrap.sh` clones a temporary checkout and invokes this installer; `MUSICZERO_REPO` and `MUSICZERO_REF` override its repository/ref.
 
-The Windows CI build disables the default tray feature; the same flag is useful for a Linux build without a tray:
+Windows compiles with default features: the tray and SMTC are first-party code in `mz/src/tray_win.rs` and `mz/src/smtc.rs` and only link as `windows` crate types. The no-default-features flag remains useful for a Linux build without a tray:
 
 ```sh
 cargo build --workspace --release --no-default-features --locked
@@ -439,6 +470,15 @@ cargo build --workspace --release --no-default-features --locked
 | `Local` / `local` | `local-module` scanning/metadata/audio provider |
 | `Icecast` / `icecast` | `icecast-module` settings/stations/live PCM provider |
 | `ModuleSupport` / `mz-module-support` | Shared provider config, paths and FFmpeg execution |
+| `android/` | Compose front-end, media3 service and engine staging for the Android APK |
+
+Windows packaging uses `musiczero-windows-*.zip` plus `install-windows.ps1`. The Android APK (all five providers bundled, Android 8+ ARM64) is built on Linux with the NDK and Gradle:
+
+```sh
+rustup target add aarch64-linux-android
+export ANDROID_NDK_HOME=/path/to/android-ndk-r27
+./scripts/build-android.sh      # produces dist/musiczero-android-arm64.apk
+```
 
 ```sh
 cargo test --workspace --locked
@@ -475,7 +515,7 @@ python3 tests/check_services.py --module ymz --host --wave-tracks 15
 python3 tests/check_services.py --host --wave-tracks 7 --history
 ```
 
-CI builds Linux x64 and Windows x64. Pushes to `main`/`master` publish `build-<run_number>` prereleases after both builds pass; `v*` tags publish versioned releases. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).
+CI builds Linux x64, Windows x64, a Windows ARM64 alpha, the Termux alpha and the Android APK. Pushes to `main`/`master` publish `build-<run_number>` prereleases after all builds pass; `v*` tags publish versioned releases. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).
 
 ## Write a provider
 
