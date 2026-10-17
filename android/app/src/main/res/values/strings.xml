@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MusicZero</string>
+    <string name="action_play">Play</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_next">Next track</string>
+    <string name="action_previous">Previous track</string>
+    <string name="action_back">Back 15 seconds</string>
+    <string name="action_forward">Forward 15 seconds</string>
+    <string name="action_playlist">Playlist</string>
+    <string name="action_history">Recent</string>
+    <string name="action_token">Yandex Music token</string>
+    <string name="token_hint">Paste the Yandex Music token</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="engine_missing">Engine binaries are missing from the APK</string>
+    <string name="engine_starting">Starting the engine…</string>
+    <string name="engine_down">Engine is not running</string>
+    <string name="engine_external_error">Failed to launch the engine</string>
+    <string name="no_modules">No providers are installed</string>
+    <string name="no_playlists">The provider offers no playlists</string>
+    <string name="empty_history">Nothing played yet</string>
+    <string name="nothing_playing">Nothing is playing</string>
+    <string name="token_saved">Token saved</string>
+</resources>

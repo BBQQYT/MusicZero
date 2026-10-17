@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+# jniLibs and assets are produced by scripts/build-android.sh
+app/src/main/jniLibs/
+app/src/main/assets/modules/

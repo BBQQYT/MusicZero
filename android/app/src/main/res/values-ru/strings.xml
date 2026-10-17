@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="action_play">Воспроизведение</string>
+    <string name="action_pause">Пауза</string>
+    <string name="action_next">Следующий трек</string>
+    <string name="action_previous">Предыдущий трек</string>
+    <string name="action_back">Назад 15 секунд</string>
+    <string name="action_forward">Вперёд 15 секунд</string>
+    <string name="action_playlist">Плейлист</string>
+    <string name="action_history">Недавние</string>
+    <string name="action_token">Токен Яндекс Музыки</string>
+    <string name="token_hint">Вставьте токен Яндекс Музыки</string>
+    <string name="save">Сохранить</string>
+    <string name="cancel">Отмена</string>
+    <string name="engine_missing">В APK нет движка (jniLibs пуст)</string>
+    <string name="engine_starting">Запуск движка…</string>
+    <string name="engine_down">Движок не запущен</string>
+    <string name="engine_external_error">Не удалось запустить движок</string>
+    <string name="no_modules">Ни один плеер не установлен</string>
+    <string name="no_playlists">У плеера нет плейлистов</string>
+    <string name="empty_history">Ещё ничего не играло</string>
+    <string name="nothing_playing">Ничего не играет</string>
+    <string name="token_saved">Токен сохранён</string>
+</resources>
