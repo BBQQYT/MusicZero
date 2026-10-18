@@ -4,9 +4,10 @@
 # windows-2022, windows-11-arm) to a Linux amd64 container, therefore:
 #   * Linux x64 is built and fully tested natively,
 #   * Linux ARM64 is cross-compiled with the Ubuntu arm64 multiarch libraries,
-#   * Windows x64/ARM64 are cross-compiled with cargo-xwin (clang-cl backend,
-#     clang + lld for ARM64) and cannot be executed here: packaging only
-#     validates the PE headers instead of running mz.exe.
+#   * Windows x64/ARM64 are cross-compiled with cargo-xwin (its default clang-cl
+#     cross compiler; a llvm-lib/llvm-ar symlink is added because the image
+#     ships no LLVM binutils on PATH) and cannot be executed here: packaging
+#     only validates the PE headers instead of running mz.exe.
 #
 # Releases are published to Forgejo with the automatic FORGEJO_TOKEN/GITHUB_TOKEN
 # (available as an environment variable and as secrets.GITHUB_TOKEN) through the
@@ -59,7 +60,7 @@ jobs:
             platform: windows
             arch: arm64
             target: aarch64-pc-windows-msvc
-            xwin_compiler: clang
+            xwin_compiler: clang-cl
             artifact: musiczero-windows-arm64-alpha
     steps:
       - uses: actions/checkout@v4
@@ -293,6 +294,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      JAVA_HOME: /opt/jdk
       ANDROID_HOME: /opt/android-sdk
       ANDROID_SDK_ROOT: /opt/android-sdk
       ANDROID_NDK_HOME: /opt/android-sdk/ndk/27.0.12077973
@@ -302,8 +304,24 @@ jobs:
       - name: Install the JDK and system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends openjdk-17-jdk-headless libclang-dev unzip curl
-          java -version
+          sudo apt-get install -y --no-install-recommends libclang-dev unzip curl
+          # The JDK comes from a tarball instead of a distribution package: the
+          # packaged openjdk drags in ca-certificates-java and its post-install
+          # hooks, which already fed this runner a spurious SIGPIPE (exit 141).
+          curl -fsSL --retry 3 -o /tmp/jdk.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse"
+          sudo mkdir -p "$JAVA_HOME"
+          sudo tar -xzf /tmp/jdk.tar.gz -C "$JAVA_HOME" --strip-components=1
+          for tool in java javac jarsigner keytool; do
+            sudo ln -sf "$JAVA_HOME/bin/$tool" "/usr/local/bin/$tool"
+          done
+          # The version banner also goes to a file first, so the JVM never writes
+          # into the runner pipe directly (see the SIGPIPE note above).
+          if ! "$JAVA_HOME/bin/java" -version >/tmp/jdk-version.txt 2>&1; then
+            cat /tmp/jdk-version.txt
+            exit 1
+          fi
+          head -1 /tmp/jdk-version.txt
 
       - name: Install the Android SDK and NDK
         run: |
@@ -313,7 +331,11 @@ jobs:
           unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # `yes` dies of SIGPIPE as soon as sdkmanager stops reading, and
+          # pipefail would report that as a failed step.
+          set +o pipefail
           yes | "$sdkmanager" --licenses >/dev/null
+          set -o pipefail
           # build-tools 36.0.0 is the default of the Android Gradle plugin used here.
           "$sdkmanager" --install "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973"
           test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"

@@ -14,7 +14,7 @@ Requires `curl` and Python 3.8+:
 curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3
 ```
 
-The installer detects the platform and CPU, chooses the newest published matching archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. ARM64 laptops use `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux with glibc 2.39+); desktop tray, MPRIS and user services work as on x64. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
+The installer detects the platform and CPU, chooses the newest published matching archive, including automatic prereleases, verifies its SHA-256 checksum from the release `SHA256SUMS` asset and installs into `~/.local/bin`. ARM64 laptops use `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux with glibc 2.39+); desktop tray, MPRIS and user services work as on x64. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
 
 The installer opens a terminal wizard automatically, including when piped from `curl`. Use Up/Down (or j/k), Enter to confirm, and Esc to cancel. It lets you choose the prefix, optionally add `mz` to Bash/Zsh/Fish PATH, install missing runtime packages using apt/dnf/pacman/zypper (sudo may prompt), configure Local, Icecast and Spotify, and log into Yandex/YouTube Music. Advanced settings include FFmpeg paths, SoundFont, radio proxy/TLS/buffering and Yandex mix preferences. YouTube login needs Firefox or Chromium/Chrome and a graphical session. Package installation and shell edits are optional; configuration can be retried without reinstalling.
 
@@ -516,7 +516,7 @@ python3 tests/check_services.py --module ymz --host --wave-tracks 15
 python3 tests/check_services.py --host --wave-tracks 7 --history
 ```
 
-CI builds Linux x64, Windows x64, a Windows ARM64 alpha, the Termux alpha and the Android APK. Pushes to `main`/`master` publish `build-<run_number>` prereleases after all builds pass; `v*` tags publish versioned releases. See [.github/workflows/ci.yml](.github/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).
+CI builds Linux x64, Windows x64, a Windows ARM64 alpha, the Termux alpha and the Android APK. Pushes to `main`/`master` publish `build-<run_number>` prereleases after all builds pass; `v*` tags publish versioned releases. See [.forgejo/workflows/ci.yml](.forgejo/workflows/ci.yml) for exact packaging and release conditions. License: [LICENSE](LICENSE).
 
 ## Write a provider
 
