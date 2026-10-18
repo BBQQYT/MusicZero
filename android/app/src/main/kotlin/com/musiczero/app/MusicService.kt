@@ -90,7 +90,7 @@ class MusicService : MediaLibraryService() {
 
     /** Same engine respawn rules the app screen follows. */
     private suspend fun maybeStartEngine() {
-        if (modules.isEmpty()) {
+        if (modules.isEmpty() || Engine.isSuspended(this)) {
             return
         }
         val now = System.currentTimeMillis()
@@ -99,19 +99,8 @@ class MusicService : MediaLibraryService() {
         }
         startedAt = now
         withContext(Dispatchers.IO) {
-            Engine.start(this@MusicService, chosenModule())
+            Engine.start(this@MusicService, Engine.chosenModule(this@MusicService, modules))
         }
-    }
-
-    private fun chosenModule(): String {
-        val stored = getSharedPreferences("mz", MODE_PRIVATE)
-            .getString("module", null)
-            ?.takeIf { value -> modules.any { it.id == value } }
-        if (stored != null) {
-            return stored
-        }
-        modules.firstOrNull { it.id != "local" && it.id != "icecast" }?.let { return it.id }
-        return modules.firstOrNull()?.id ?: "ymz"
     }
 
     override fun onDestroy() {

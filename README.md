@@ -66,7 +66,8 @@ To build on the device: `pkg install rust clang make pkg-config git`, clone this
 
 `musiczero-android-arm64.apk` bundles the same engine and all five providers inside a native Compose app (Android 8+ ARM64):
 
-- Material 3 UI with Material You dynamic accents on Android 12+; cover art, seek bar, previous/play/next, ±15 s, playlist and history sheets, a Yandex Music token sheet.
+- Retro-style Material 3 UI with Material You dynamic accents on Android 12+: bottom navigation (Home, Playlists, Recent, Settings), a provider rail with generated gradient cards, a floating mini player, and a full-screen player that lays the cover over a blurred copy of itself with an accent color extracted from the artwork; drag down or Back closes it.
+- The player screen offers previous/play/next, ±15 s seek buttons, a history sheet with replay and a playlist picker; the Settings tab can stop/start the engine and edits the active provider's `settings` JSON in place (booleans as switches, scalars as text fields) plus the Yandex Music token.
 - A `MediaLibraryService` session mirrors playback to the lock screen, the media panel and Android Auto: Audio shows the active module's playlists and starts one from the car.
 - First start unpacks the bundled Rust binaries and the module manifests, then runs the player as a child process with HOME, XDG paths and `MZ_MODULES_DIR` inside app storage. The engine keeps running under the media notification; closing the notification stops the player.
 

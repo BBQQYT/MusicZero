@@ -10,35 +10,34 @@ import java.io.DataInputStream
 import java.io.File
 
 /**
- * The same one-line JSON control protocol the mz CLI and tray use. The host
- * listens on a unix socket under our cache directory; LocalSocket talks to it
- * directly, so no subprocess is spawned per command.
+ * The one-line JSON control protocol shared by the mz CLI, the tray and this
+ * app. The host listens on a unix socket inside our cache directory;
+ * LocalSocket talks to it directly, so no subprocess is spawned per command.
  */
 class MzClient(private val socketPath: File) {
 
     var lastError: String? = null
         private set
 
-    /** Sends one request line and parses one reply line. */
-    suspend fun call(request: JSONObject): JSONObject? =
-        withContext(Dispatchers.IO) {
-            try {
-                LocalSocket().use { socket ->
-                    socket.connect(
-                        LocalSocketAddress(socketPath.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM)
-                    )
-                    socket.outputStream.apply {
-                        write((request.toString() + "\n").toByteArray(Charsets.UTF_8))
-                        flush()
-                    }
-                    val reader = DataInputStream(socket.inputStream)
-                    readLine(reader)?.let { JSONObject(it) }
+    /** Sends one request line and parses one reply line, or null on failure. */
+    suspend fun call(request: JSONObject): JSONObject? = withContext(Dispatchers.IO) {
+        try {
+            LocalSocket().use { socket ->
+                socket.connect(
+                    LocalSocketAddress(socketPath.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM),
+                )
+                socket.outputStream.apply {
+                    write((request.toString() + "\n").toByteArray(Charsets.UTF_8))
+                    flush()
                 }
-            } catch (failure: Exception) {
-                lastError = failure.message ?: failure.toString()
-                null
+                val reader = DataInputStream(socket.inputStream)
+                readLine(reader)?.let { JSONObject(it) }
             }
+        } catch (failure: Exception) {
+            lastError = failure.message ?: failure.toString()
+            null
         }
+    }
 
     private fun readLine(reader: DataInputStream): String? {
         val bytes = ArrayList<Byte>(1024)
@@ -60,36 +59,42 @@ class MzClient(private val socketPath: File) {
         fun default(cacheDirectory: File): MzClient =
             MzClient(File(cacheDirectory, "musiczero.sock"))
 
-        /** Player snapshot; values follow exactly the mz status JSON. */
-        fun parseStatus(reply: JSONObject): Playing {
-            return Playing(
-                module = reply.optString("module"),
-                name = reply.optString("name"),
-                playlist = reply.optString("playlist"),
-                status = reply.optString("status"),
-                trackId = reply.optString("track_id"),
-                title = reply.optString("title"),
-                artist = reply.optString("artist"),
-                positionMs = reply.optLong("position_ms"),
-                durationMs = reply.optLong("duration_ms"),
-                canSeek = reply.optBoolean("can_seek"),
-                canPrevious = reply.optBoolean("can_previous"),
-                artUrl = reply.optString("art_url"),
-            )
+        fun request(
+            action: String,
+            value: String = "",
+            key: String = "",
+            module: String = "",
+        ): JSONObject = JSONObject().apply {
+            put("action", action)
+            if (value.isNotEmpty()) put("value", value)
+            if (key.isNotEmpty()) put("key", key)
+            if (module.isNotEmpty()) put("module", module)
         }
 
-        fun parseHistory(reply: JSONObject): List<Track> {
-            val past = reply.optJSONArray("history") ?: return emptyList()
-            return past.toTracks()
-        }
+        /** Player snapshot; fields follow exactly the mz status JSON. */
+        fun parseStatus(reply: JSONObject): Playing = Playing(
+            module = reply.optString("module"),
+            name = reply.optString("name"),
+            playlist = reply.optString("playlist"),
+            status = reply.optString("status"),
+            trackId = reply.optString("track_id"),
+            title = reply.optString("title"),
+            artist = reply.optString("artist"),
+            positionMs = reply.optLong("position_ms"),
+            durationMs = reply.optLong("duration_ms"),
+            canSeek = reply.optBoolean("can_seek"),
+            canPrevious = reply.optBoolean("can_previous"),
+            artUrl = reply.optString("art_url"),
+        )
 
-        fun parsePlaylists(reply: JSONObject): Playlists {
-            val items = reply.optJSONArray("playlists") ?: JSONArray()
-            return Playlists(
-                playlist = reply.optString("playlist"),
-                playlists = items.toPlaylists(),
-            )
-        }
+        /** The status reply embeds the recent-track list under "history". */
+        fun parseHistory(reply: JSONObject): List<Track> =
+            (reply.optJSONArray("history") ?: JSONArray()).toTracks()
+
+        fun parsePlaylists(reply: JSONObject): Playlists = Playlists(
+            playlist = reply.optString("playlist"),
+            playlists = (reply.optJSONArray("playlists") ?: JSONArray()).toPlaylists(),
+        )
     }
 }
 

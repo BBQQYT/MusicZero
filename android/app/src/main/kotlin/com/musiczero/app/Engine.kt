@@ -41,13 +41,12 @@ object Engine {
         try {
             context.assets.list("modules")?.sorted()?.forEach { id ->
                 context.assets.open("modules/$id/module.json").bufferedReader().use { reader ->
-                    val json = reader.readText()
-                    result.add(readManifest(id, json))
+                    result.add(readManifest(id, reader.readText()))
                 }
             }
         } catch (_: Exception) {
             // Assets exist only when scripts/build-android.sh staged them;
-            // debug builds without it have no modules and the UI reports that.
+            // debug builds without it have no modules and the UI says so.
         }
         return result
     }
@@ -67,15 +66,12 @@ object Engine {
     }
 
     /** Copies the packaged binaries and manifests into their final layout. */
-    fun prepare(context: Context) {
+    fun prepare(context: Context) = synchronized(LOCK) {
         val bin = binDir(context).apply {
             deleteRecursively()
             mkdirs()
         }
-        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir
-        if (nativeLibraryDir == null) {
-            return
-        }
+        val nativeLibraryDir = context.applicationInfo.nativeLibraryDir ?: return@synchronized
         File(nativeLibraryDir).list()?.forEach { library ->
             val target = EXECUTABLES[library] ?: return@forEach
             copyExecutable(File(nativeLibraryDir, library), File(bin, target))
@@ -122,8 +118,8 @@ object Engine {
         if (!host.exists()) {
             return false
         }
-        // Several pollers (app screen, service) may race the startup window;
-        // only one spawn request every few seconds goes through.
+        // Several pollers (app screen, media service) race the startup
+        // window; only one spawn request every few seconds goes through.
         synchronized(LOCK) {
             val now = System.currentTimeMillis()
             if (now - LAST_SPAWN < 4_000) {
@@ -148,11 +144,6 @@ object Engine {
         }
     }
 
-    private val LOCK = Any()
-
-    @Volatile
-    private var LAST_SPAWN = 0L
-
     fun stop() {
         try {
             PROCESS?.destroy()
@@ -160,6 +151,35 @@ object Engine {
         }
         PROCESS = null
     }
+
+    /** The module the engine should run: the live one, the stored one, or a sensible default. */
+    fun chosenModule(context: Context, modules: List<Manifest>, active: String? = null): String {
+        active?.takeIf { it.isNotEmpty() }?.let { return it }
+        prefs(context).getString("module", null)
+            ?.takeIf { stored -> modules.any { it.id == stored } }
+            ?.let { return it }
+        // local/icecast need ffmpeg data which the Android package lacks.
+        modules.firstOrNull { it.id != "local" && it.id != "icecast" }?.let { return it.id }
+        return modules.firstOrNull()?.id ?: "ymz"
+    }
+
+    fun storeModule(context: Context, moduleId: String) {
+        prefs(context).edit().putString("module", moduleId).apply()
+    }
+
+    /** True after the user pressed Stop: pollers must not respawn the engine. */
+    fun isSuspended(context: Context): Boolean = prefs(context).getBoolean("suspended", false)
+
+    fun setSuspended(context: Context, suspended: Boolean) {
+        prefs(context).edit().putBoolean("suspended", suspended).apply()
+    }
+
+    private fun prefs(context: Context) = context.getSharedPreferences("mz", Context.MODE_PRIVATE)
+
+    private val LOCK = Any()
+
+    @Volatile
+    private var LAST_SPAWN = 0L
 
     private var PROCESS: Process? = null
 }

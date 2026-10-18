@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
         askForNotifications()
         setContent {
             MusicZeroTheme {
-                MusicZeroScreen()
+                MusicZeroApp()
             }
         }
     }

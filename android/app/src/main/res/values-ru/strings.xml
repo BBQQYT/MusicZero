@@ -1,24 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="action_play">Воспроизведение</string>
-    <string name="action_pause">Пауза</string>
-    <string name="action_next">Следующий трек</string>
-    <string name="action_previous">Предыдущий трек</string>
-    <string name="action_back">Назад 15 секунд</string>
-    <string name="action_forward">Вперёд 15 секунд</string>
-    <string name="action_playlist">Плейлист</string>
-    <string name="action_history">Недавние</string>
-    <string name="action_token">Токен Яндекс Музыки</string>
+    <string name="app_name">MusicZero</string>
+
+    <string name="tab_home">Главная</string>
+    <string name="tab_playlists">Плейлисты</string>
+    <string name="tab_history">Недавние</string>
+    <string name="tab_settings">Настройки</string>
+
+    <string name="greeting_morning">Доброе утро</string>
+    <string name="greeting_day">Добрый день</string>
+    <string name="greeting_evening">Добрый вечер</string>
+    <string name="greeting_night">Доброй ночи</string>
+
+    <string name="section_providers">Провайдеры</string>
+    <string name="section_recent">Недавно игравшие</string>
+    <string name="section_playlists">Плейлисты</string>
+    <string name="playing_from">Играет из плейлиста</string>
+
+    <string name="nothing_playing">Ничего не воспроизводится</string>
+    <string name="live_stream">Прямой эфир</string>
+    <string name="empty_playlists">У провайдера пока нет плейлистов</string>
+    <string name="empty_history">Здесь появятся прослушанные треки</string>
+    <string name="no_modules">В этой сборке нет провайдеров</string>
+
+    <string name="engine_starting">Запуск движка…</string>
+    <string name="engine_down">Движок не запущен</string>
+    <string name="engine_state_running">Работает</string>
+    <string name="engine_state_starting">Запускается…</string>
+    <string name="engine_state_down">Остановлен</string>
+
+    <string name="settings_engine">Движок</string>
+    <string name="settings_provider">Настройки провайдера</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_start">Запустить</string>
+    <string name="settings_stop">Остановить</string>
+    <string name="settings_reload">Обновить</string>
+    <string name="settings_loading">Загрузка…</string>
+    <string name="settings_version">Версия %1$s</string>
+    <string name="settings_about_text">MusicZero воспроизводит музыку через сменные провайдеры. Движок и бинарники модулей работают в приватной папке приложения, а воспроизведение продолжается в фоне — управляйте им из уведомления.</string>
+    <string name="provider_no_settings">Настроек пока нет</string>
+    <string name="setting_complex">Сложное значение — измените через CLI mz</string>
+
+    <string name="token_title">Токен Яндекс Музыки</string>
+    <string name="token_set">Настроен</string>
+    <string name="token_unset">Не задан</string>
+    <string name="token_edit">Изменить</string>
     <string name="token_hint">Вставьте токен Яндекс Музыки</string>
     <string name="save">Сохранить</string>
     <string name="cancel">Отмена</string>
-    <string name="engine_missing">В APK нет движка (jniLibs пуст)</string>
-    <string name="engine_starting">Запуск движка…</string>
-    <string name="engine_down">Движок не запущен</string>
-    <string name="engine_external_error">Не удалось запустить движок</string>
-    <string name="no_modules">Ни один плеер не установлен</string>
-    <string name="no_playlists">У плеера нет плейлистов</string>
-    <string name="empty_history">Ещё ничего не играло</string>
-    <string name="nothing_playing">Ничего не играет</string>
-    <string name="token_saved">Токен сохранён</string>
+
+    <string name="sheet_playlists">Плейлисты</string>
+    <string name="sheet_history">Недавние треки</string>
 </resources>
