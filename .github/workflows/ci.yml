@@ -154,10 +154,14 @@ jobs:
       - name: Android SDK and NDK
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          tools_dir=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | tail -1)
-          export PATH="$tools_dir:$ANDROID_HOME/platform-tools:$PATH"
-          sdkmanager --install "ndk;27.0.12077973"
-          ndk_path=$(ls -d "$ANDROID_HOME"/ndk/* | tail -1)
+          ndk_path=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$ndk_path" ]; then
+            tools_dir=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | tail -1)
+            export PATH="$tools_dir:$ANDROID_HOME/platform-tools:$PATH"
+            sdkmanager --install "ndk;27.0.12077973"
+            ndk_path=$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)
+          fi
+          echo "Using NDK $ndk_path"
           echo "ANDROID_NDK_HOME=$ndk_path" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -173,7 +177,7 @@ jobs:
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
         with:
           name: musiczero-android-arm64
-          path: musiczero-android-arm64.apk
+          path: dist/musiczero-android-arm64.apk
           if-no-files-found: error
 
   release:
