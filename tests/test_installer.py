@@ -300,7 +300,7 @@ class InstallerTests(unittest.TestCase):
         cargo.write_text("#!/usr/bin/env python3\nimport pathlib,sys\n"
                          "target=pathlib.Path(sys.argv[sys.argv.index('--target-dir')+1])/'release'\n"
                          "target.mkdir(parents=True)\n"
-                         "for name in ['mz','ymz-module','youmz-module','local-module','icecast-module']:\n"
+                         "for name in ['mz','ymz-module','youmz-module','spotify-module','local-module','icecast-module']:\n"
                          "    (target/name).write_text('built in custom target')\n")
         cargo.chmod(0o755)
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
@@ -308,7 +308,7 @@ class InstallerTests(unittest.TestCase):
         subprocess.run([str(ROOT / 'install.sh')], env=env, check=True, stdout=subprocess.PIPE)
         bin_dir = self.root / 'prefix/bin'
         self.assertEqual((bin_dir / 'mz').read_text(), 'built in custom target')
-        for module in ('local', 'icecast', 'ymz', 'youmz'):
+        for module in ('local', 'icecast', 'spotify', 'ymz', 'youmz'):
             self.assertTrue((bin_dir / 'modules' / module / 'module.json').is_file())
             self.assertEqual((bin_dir / 'modules' / module / (module + '-module')).read_text(),
                              'built in custom target')

@@ -151,9 +151,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: NDK (r27 or newer)
-        run: sdkmanager --install "ndk;27.0.12077973" && echo "ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - name: Android SDK and NDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          tools_dir=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | tail -1)
+          export PATH="$tools_dir:$ANDROID_HOME/platform-tools:$PATH"
+          sdkmanager --install "ndk;27.0.12077973"
+          ndk_path=$(ls -d "$ANDROID_HOME"/ndk/* | tail -1)
+          echo "ANDROID_NDK_HOME=$ndk_path" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
