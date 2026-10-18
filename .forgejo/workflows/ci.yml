@@ -5,9 +5,11 @@
 #   * Linux x64 is built and fully tested natively,
 #   * Linux ARM64 is cross-compiled with the Ubuntu arm64 multiarch libraries,
 #   * Windows x64/ARM64 are cross-compiled with cargo-xwin (its default clang-cl
-#     cross compiler; a llvm-lib/llvm-ar symlink is added because the image
-#     ships no LLVM binutils on PATH) and cannot be executed here: packaging
-#     only validates the PE headers instead of running mz.exe.
+#     cross compiler; a llvm-lib/llvm-ar symlink is added because the image ships
+#     no LLVM binutils on PATH, and ARM64 additionally routes the plain `clang`
+#     driver — which ring 0.17.14 forces for that target — back through the
+#     clang-cl driver mode) and cannot be executed here: packaging only
+#     validates the PE headers instead of running mz.exe.
 #
 # Releases are published to Forgejo with the automatic FORGEJO_TOKEN/GITHUB_TOKEN
 # (available as an environment variable and as secrets.GITHUB_TOKEN) through the
@@ -126,6 +128,19 @@ jobs:
               fi
             fi
           done
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # ring 0.17.14 forces the plain `clang` driver for aarch64-windows
+            # (its build.rs does not trust clang-cl there) and that driver reads
+            # the clang-cl style /imsvc arguments cargo-xwin emits as file names.
+            # /opt/mz-tools/clang re-enters the clang-cl driver mode; the build
+            # step puts that directory in front of PATH.
+            sudo mkdir -p /opt/mz-tools
+            sudo tee /opt/mz-tools/clang >/dev/null <<'SH'
+          #!/bin/sh
+          exec /usr/bin/clang --driver-mode=cl "$@"
+          SH
+            sudo chmod 0755 /opt/mz-tools/clang
+          fi
           command -v clang clang-cl llvm-lib llvm-ar
 
       - uses: https://github.com/dtolnay/rust-toolchain@stable
@@ -165,6 +180,8 @@ jobs:
       - name: Build Windows binaries
         if: matrix.platform == 'windows'
         run: |
+          # /opt/mz-tools carries the `clang` wrapper created above (ARM64 only).
+          export PATH="/opt/mz-tools:$PATH"
           cargo xwin build --workspace --release --no-default-features --locked \
             --target ${{ matrix.target }} --cross-compiler ${{ matrix.xwin_compiler }}
 
