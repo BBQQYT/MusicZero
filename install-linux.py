@@ -20,7 +20,10 @@ import urllib.request
 from pathlib import Path
 
 
-API = "https://api.github.com/repos/BBQQYT/MusicZero/releases"
+API = os.environ.get(
+    "MUSICZERO_API",
+    "https://forgejo.xatacraft.ru/api/v1/repos/bbqqyt/MusicZero/releases",
+)
 ASSET = "musiczero-linux-x64.tar.gz"
 
 
@@ -66,7 +69,7 @@ FILES = (
 def open_url(url, *, api=False):
     headers = {"User-Agent": "MusicZero-Linux-Installer"}
     if api:
-        headers["Accept"] = "application/vnd.github+json"
+        headers["Accept"] = "application/json"
     request = urllib.request.Request(
         url,
         headers=headers,
@@ -74,22 +77,43 @@ def open_url(url, *, api=False):
     return urllib.request.urlopen(request, timeout=30)
 
 
+def checksums_digest(assets, wanted):
+    """Forgejo release assets carry no digest, so the workflow publishes SHA256SUMS."""
+    sums = next((asset for asset in assets if asset.get("name") == "SHA256SUMS"), None)
+    if sums is None:
+        raise RuntimeError("Релиз не содержит файл SHA256SUMS")
+    with open_url(sums["browser_download_url"]) as response:
+        payload = response.read()
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8", "replace")
+    for line in payload.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1].lstrip("*") == wanted:
+            digest = fields[0].lower()
+            if len(digest) == 64 and all(character in "0123456789abcdef" for character in digest):
+                return digest
+            raise RuntimeError("Некорректная контрольная сумма в SHA256SUMS")
+    raise RuntimeError(f"SHA256SUMS не содержит {wanted}")
+
+
 def release_asset(asset=None):
     wanted = asset or platform_asset()
     tag = os.environ.get("MUSICZERO_TAG")
-    url = f"{API}/tags/{urllib.parse.quote(tag, safe='')}" if tag else f"{API}?per_page=30"
+    url = f"{API}/tags/{urllib.parse.quote(tag, safe='')}" if tag else f"{API}?limit=30"
     with open_url(url, api=True) as response:
         data = json.load(response)
     releases = [data] if tag else data
     for release in releases:
         if release.get("draft"):
             continue
-        for asset in release.get("assets", []):
-            if asset.get("name") == wanted and asset.get("state") == "uploaded":
-                digest = asset.get("digest") or ""
-                if not digest.startswith("sha256:"):
-                    raise RuntimeError("GitHub не сообщил SHA-256 архива")
-                return release["tag_name"], asset["browser_download_url"], digest[7:]
+        assets = release.get("assets", [])
+        for candidate in assets:
+            if candidate.get("name") != wanted or candidate.get("state", "uploaded") != "uploaded":
+                continue
+            digest = candidate.get("digest") or ""
+            if not digest.startswith("sha256:"):
+                digest = "sha256:" + checksums_digest(assets, wanted)
+            return release["tag_name"], candidate["browser_download_url"], digest[7:]
     raise RuntimeError(f"Архив {wanted} не найден среди опубликованных релизов")
 
 

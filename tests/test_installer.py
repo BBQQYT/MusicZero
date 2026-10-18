@@ -68,6 +68,19 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, wanted):
                 installer.release_asset(wanted)
 
+    def test_forgejo_releases_are_verified_with_sha256sums(self):
+        wanted = 'musiczero-termux-arm64-alpha.tar.gz'
+        listing = 'a' * 64 + '  musiczero-linux-x64.tar.gz\n' + 'b' * 64 + '  *' + wanted + '\n'
+        release = dict(tag_name='build-30', draft=False, assets=[
+            dict(name=wanted, state='uploaded', browser_download_url='https://example.org/build-30'),
+            dict(name='SHA256SUMS', state='uploaded', browser_download_url='https://example.org/sums'),
+        ])
+        with patch.object(installer, 'open_url') as open_url, \
+             patch.dict(os.environ, {'MUSICZERO_TAG': ''}):
+            open_url.side_effect = [io.StringIO(json.dumps([release])), io.StringIO(listing)]
+            self.assertEqual(installer.release_asset(wanted),
+                             ('build-30', 'https://example.org/build-30', 'b' * 64))
+
     def test_termux_install_defaults_to_prefix_bin(self):
         archive = self.archive()
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()

@@ -11,7 +11,7 @@ MusicZero — один музыкальный плеер со сменными �
 Нужны `curl` и Python 3.8+:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3
 ```
 
 Установщик определяет систему и архитектуру, выбирает самый новый опубликованный подходящий архив, включая автоматические предварительные сборки, проверяет SHA-256 от GitHub и устанавливает файлы в `~/.local/bin`. Для ARM64-ноутбуков используется `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux с glibc 2.39+); трей, MPRIS и пользовательский сервис работают как на x64. Повторный запуск обновляет программу. Пользовательские настройки и папки собственных модулей сохраняются. Старые архивы могут содержать только YMZ и YouMZ.
@@ -20,9 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 ```sh
 # Повторная настройка уже установленной программы
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --tui --setup-only
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3 - --tui --setup-only
 # Автоматизация: только установка, без вопросов
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --non-interactive
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3 - --non-interactive
 ```
 
 `--tui` требует управляющий терминал (`/dev/tty`) и заданный `TERM`; без терминала по умолчанию выполняется только установка. Мастер использует стандартный модуль Python `curses`, пакет dialog не требуется. Зависимости проверяются для выбранного источника и устанавливаются только по выбору пользователя. Esc сохраняет уже выполненную установку и записанные настройки. При обновлении все файлы подготавливаются до замены, а при ошибке замены предыдущие файлы восстанавливаются; транзакция при отключении питания или одновременных запусках установщика не гарантируется. Настройки и собственные модули сохраняются. После обновления перезапустите работающий плеер.
@@ -36,7 +36,7 @@ export PATH="$HOME/.local/bin:$PATH"
 `MUSICZERO_PREFIX` меняет префикс установки: исполняемые файлы попадут в `<prefix>/bin`. `MUSICZERO_TAG` выбирает конкретный релиз. При передаче скрипта через конвейер переменные задаются для Python:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py |
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py |
   MUSICZERO_PREFIX="$HOME/.local" MUSICZERO_TAG="build-123" python3
 ```
 
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux
 
 ```sh
 pkg install python curl ffmpeg
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3
 mz config
 ```
 
@@ -75,7 +75,7 @@ mz config
 
 ### Установка через Windows-установщик
 
-Скачайте `musiczero-windows-x64.zip` (или `musiczero-windows-arm64-alpha.zip` для ноутбуков на Snapdragon) из [Releases](https://github.com/BBQQYT/MusicZero/releases), распакуйте и запустите установщик в PowerShell:
+Скачайте `musiczero-windows-x64.zip` (или `musiczero-windows-arm64-alpha.zip` для ноутбуков на Snapdragon) из [Releases](https://forgejo.xatacraft.ru/bbqqyt/MusicZero/releases), распакуйте и запустите установщик в PowerShell:
 
 ```powershell
 # Установка или обновление: копирует musiczero\ в %LOCALAPPDATA%\MusicZero,

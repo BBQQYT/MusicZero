@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo=${MUSICZERO_REPO:-https://github.com/BBQQYT/MusicZero.git}
+repo=${MUSICZERO_REPO:-https://forgejo.xatacraft.ru/bbqqyt/MusicZero.git}
 ref=${MUSICZERO_REF:-main}
 checkout=$(mktemp -d)
 trap 'rm -rf -- "$checkout"' EXIT HUP INT TERM

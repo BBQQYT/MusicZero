@@ -11,7 +11,7 @@ MusicZero is one audio player with replaceable providers: **Yandex Music**, **Yo
 Requires `curl` and Python 3.8+:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3
 ```
 
 The installer detects the platform and CPU, chooses the newest published matching archive, including automatic prereleases, verifies its GitHub SHA-256 digest and installs into `~/.local/bin`. ARM64 laptops use `musiczero-linux-arm64-alpha.tar.gz` (AArch64 Linux with glibc 2.39+); desktop tray, MPRIS and user services work as on x64. Run it again to update. Custom module folders and user settings are preserved. Older release archives may contain only YMZ and YouMZ.
@@ -20,9 +20,9 @@ The installer opens a terminal wizard automatically, including when piped from `
 
 ```sh
 # Reopen setup for an existing installation
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --tui --setup-only
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3 - --tui --setup-only
 # Automation: install binaries without prompts
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3 - --non-interactive
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3 - --non-interactive
 ```
 
 `--tui` requires a controlling terminal (`/dev/tty`) with `TERM` set; without a terminal the default is install-only. The wizard uses Python's standard `curses` module and requires no dialog package. Missing packages are checked for the selected source, not installed automatically. Pressing Esc leaves completed installation/settings intact. During updates all files are staged before replacement and existing files are restored if replacement fails; this does not provide a transaction across power loss or concurrent installer runs. User settings and custom modules are preserved. A running player should be restarted after an update.
@@ -36,7 +36,7 @@ export PATH="$HOME/.local/bin:$PATH"
 `MUSICZERO_PREFIX` changes the installation prefix; binaries go in `<prefix>/bin`. `MUSICZERO_TAG` selects a particular release. When piping the installer into Python, set these variables on the Python command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py |
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py |
   MUSICZERO_PREFIX="$HOME/.local" MUSICZERO_TAG="build-123" python3
 ```
 
@@ -48,7 +48,7 @@ Native Android 8+ (API 26), ARM64 only. Install inside Termux:
 
 ```sh
 pkg install python curl ffmpeg
-curl -fsSL https://raw.githubusercontent.com/BBQQYT/MusicZero/main/install-linux.py | python3
+curl -fsSL https://forgejo.xatacraft.ru/bbqqyt/MusicZero/raw/branch/main/install-linux.py | python3
 mz config
 ```
 
@@ -75,7 +75,7 @@ Install the APK from Releases (sideload; it is signed with the CI debug key). Co
 
 ### Windows installer
 
-Download `musiczero-windows-x64.zip` (or `musiczero-windows-arm64-alpha.zip` for Snapdragon laptops) from [Releases](https://github.com/BBQQYT/MusicZero/releases), extract it and run the installer from PowerShell:
+Download `musiczero-windows-x64.zip` (or `musiczero-windows-arm64-alpha.zip` for Snapdragon laptops) from [Releases](https://forgejo.xatacraft.ru/bbqqyt/MusicZero/releases), extract it and run the installer from PowerShell:
 
 ```powershell
 # Install or update: copies musiczero\ into %LOCALAPPDATA%\MusicZero,
