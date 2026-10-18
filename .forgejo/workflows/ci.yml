@@ -1,0 +1,447 @@
+# Forgejo Actions pipeline.
+#
+# The Forgejo runner maps every label (ubuntu-24.04, ubuntu-24.04-arm,
+# windows-2022, windows-11-arm) to a Linux amd64 container, therefore:
+#   * Linux x64 is built and fully tested natively,
+#   * Linux ARM64 is cross-compiled with the Ubuntu arm64 multiarch libraries,
+#   * Windows x64/ARM64 are cross-compiled with cargo-xwin (clang-cl backend,
+#     clang + lld for ARM64) and cannot be executed here: packaging only
+#     validates the PE headers instead of running mz.exe.
+#
+# Releases are published to Forgejo with the automatic FORGEJO_TOKEN/GITHUB_TOKEN
+# (available as an environment variable and as secrets.GITHUB_TOKEN) through the
+# v1 API, and include SHA256SUMS because Forgejo release assets carry no digest.
+#
+# Swatinem/rust-cache is deliberately not used: the runner cache endpoint is
+# unreachable (connect ETIMEDOUT) and every restore waits for a ~5 minute
+# connect timeout before the build even starts.
+
+name: Build and release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            artifact: musiczero-linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            target: aarch64-unknown-linux-gnu
+            artifact: musiczero-linux-arm64-alpha
+          - os: windows-2022
+            platform: windows
+            arch: x64
+            target: x86_64-pc-windows-msvc
+            xwin_compiler: clang-cl
+            artifact: musiczero-windows-x64
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+            xwin_compiler: clang
+            artifact: musiczero-windows-arm64-alpha
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner environment
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: |
+          echo "server=${GITHUB_SERVER_URL:-${FORGEJO_SERVER_URL:-unset}}"
+          echo "api=${GITHUB_API_URL:-${FORGEJO_API_URL:-unset}}"
+          echo "repository=${GITHUB_REPOSITORY:-${FORGEJO_REPOSITORY:-unset}}"
+          echo "ref=${GITHUB_REF:-${FORGEJO_REF:-unset}}"
+          echo "run_number=${GITHUB_RUN_NUMBER:-${FORGEJO_RUN_NUMBER:-unset}}"
+          echo "sha=${GITHUB_SHA:-${FORGEJO_SHA:-unset}}"
+          echo "event=${GITHUB_EVENT_NAME:-${FORGEJO_EVENT_NAME:-unset}}"
+          echo "token=${GITHUB_TOKEN:+set}${FORGEJO_TOKEN:+set}"
+          echo "env_file=${GITHUB_ENV:-${FORGEJO_ENV:-unset}}"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip unzip curl pkg-config openssl dbus
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends libasound2-dev libssl-dev libsqlite3-dev ffmpeg libopenmpt0
+
+      - name: Install ARM Linux cross libraries
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          # A dedicated source list keeps the amd64 sources untouched and avoids
+          # asking archive.ubuntu.com (which has no arm64) for arm64 packages.
+          sudo tee /etc/apt/sources.list.d/musiczero-cross.sources >/dev/null <<'SOURCES'
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          SOURCES
+          sudo apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/musiczero-cross.sources \
+            -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu \
+            libssl-dev:arm64 libasound2-dev:arm64 libsqlite3-dev:arm64
+
+      - name: Install MSVC cross tools
+        if: matrix.platform == 'windows'
+        run: |
+          sudo apt-get install -y --no-install-recommends clang lld llvm
+          for tool in llvm-lib llvm-ar llvm-ranlib; do
+            if [ ! -x "/usr/bin/$tool" ]; then
+              found=$(ls /usr/lib/llvm-*/bin/$tool 2>/dev/null | sort -V | tail -1)
+              if [ -n "$found" ]; then
+                sudo ln -sf "$found" "/usr/bin/$tool"
+              fi
+            fi
+          done
+          command -v clang clang-cl llvm-lib llvm-ar
+
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-xwin
+        if: matrix.platform == 'windows'
+        run: cargo install --locked cargo-xwin
+
+      # --- Linux tests (x64 only, the ARM64 container cannot run the binaries) ---
+      - name: Test Linux workspace and installer
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: |
+          cargo test --workspace --locked
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Test Android AAudio backend on Linux
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: |
+          cargo build -p mz -p local -p icecast --no-default-features --features mz/aaudio-output --locked --target-dir target/aaudio
+          MZ_TEST_PROFILE=aaudio/debug python3 tests/smoke_aaudio.py
+
+      # --- Builds ---
+      - name: Build Linux x64
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: cargo build --workspace --release --locked
+
+      - name: Build Linux ARM64
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_LIBDIR: /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Build Windows binaries
+        if: matrix.platform == 'windows'
+        run: |
+          cargo xwin build --workspace --release --no-default-features --locked \
+            --target ${{ matrix.target }} --cross-compiler ${{ matrix.xwin_compiler }}
+
+      - name: Test Linux playback and seeking
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        env:
+          MZ_TEST_PROFILE: release
+        run: |
+          python3 tests/smoke_seek.py
+          python3 tests/smoke_wave.py
+          python3 tests/smoke_history.py
+          python3 tests/smoke_config.py
+          python3 tests/smoke_service.py
+          python3 tests/smoke_modules.py
+          python3 tests/smoke_https.py
+
+      # --- Packaging ---
+      - name: Package Linux release
+        if: matrix.platform == 'linux' && github.event_name != 'pull_request'
+        run: |
+          case "${{ matrix.arch }}" in
+            x64) target_dir=target/release ;;
+            *) target_dir="target/${{ matrix.target }}/release" ;;
+          esac
+          mkdir -p dist/musiczero/modules/ymz dist/musiczero/modules/youmz dist/musiczero/modules/spotify dist/musiczero/modules/local dist/musiczero/modules/icecast
+          cp "$target_dir/mz" README.md README_RU.md LICENSE dist/musiczero/
+          for module in ymz youmz spotify local icecast; do
+            cp "modules/$module/module.json" "$target_dir/$module-module" "dist/musiczero/modules/$module/"
+            if [ -f "modules/$module/README.md" ]; then
+              cp "modules/$module/README.md" "dist/musiczero/modules/$module/"
+            fi
+          done
+          tar -czf "${{ matrix.artifact }}.tar.gz" -C dist musiczero
+
+      - name: Package Windows release
+        if: matrix.platform == 'windows' && github.event_name != 'pull_request'
+        run: |
+          bin_dir="target/${{ matrix.target }}/release"
+          mkdir -p dist/musiczero/modules/ymz dist/musiczero/modules/youmz dist/musiczero/modules/spotify dist/musiczero/modules/local dist/musiczero/modules/icecast
+          cp "$bin_dir/mz.exe" README.md README_RU.md LICENSE dist/musiczero/
+          for module in ymz youmz spotify local icecast; do
+            cp "modules/$module/module.json" "$bin_dir/$module-module.exe" "dist/musiczero/modules/$module/"
+            if [ -f "modules/$module/README.md" ]; then
+              cp "modules/$module/README.md" "dist/musiczero/modules/$module/"
+            fi
+          done
+          python3 - "${{ matrix.target }}" <<'PY'
+          import os
+          import struct
+          import sys
+
+          expected = 0xAA64 if sys.argv[1].startswith("aarch64") else 0x8664
+          for root, _, files in os.walk("dist/musiczero"):
+              for name in files:
+                  if not name.endswith(".exe"):
+                      continue
+                  path = os.path.join(root, name)
+                  with open(path, "rb") as handle:
+                      data = handle.read()
+                  offset = struct.unpack_from("<I", data, 0x3C)[0]
+                  machine = struct.unpack_from("<H", data, offset + 4)[0]
+                  if machine != expected:
+                      raise SystemExit(f"{path}: unexpected PE machine {machine:#x}")
+          print("PE headers verified")
+          PY
+          (cd dist && zip -q -r "../${{ matrix.artifact }}.zip" musiczero)
+
+      - uses: actions/upload-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          name: ${{ matrix.artifact }}
+          path: musiczero-*
+          if-no-files-found: error
+
+  termux-alpha:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ANDROID_NDK_HOME: /opt/android-ndk-r27c
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev binutils unzip curl
+
+      - name: Install the Android NDK
+        run: |
+          curl -fsSL --retry 3 -o /tmp/android-ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          sudo unzip -q /tmp/android-ndk.zip -d /opt
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cross-build Android ARM64 (API 26)
+        run: |
+          chmod +x scripts/build-termux.sh
+          ./scripts/build-termux.sh
+
+      - name: Check Android architecture and dependencies
+        run: python3 tests/check_android.py
+
+      - name: Package Termux alpha
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p dist/musiczero/modules/ymz dist/musiczero/modules/youmz dist/musiczero/modules/spotify dist/musiczero/modules/local dist/musiczero/modules/icecast
+          cp target/aarch64-linux-android/release/mz README.md README_RU.md LICENSE dist/musiczero/
+          for module in ymz youmz spotify local icecast; do
+            cp "modules/$module/module.json" "target/aarch64-linux-android/release/$module-module" "dist/musiczero/modules/$module/"
+            if [ -f "modules/$module/README.md" ]; then
+              cp "modules/$module/README.md" "dist/musiczero/modules/$module/"
+            fi
+          done
+          tar -czf musiczero-termux-arm64-alpha.tar.gz -C dist musiczero
+
+      - uses: actions/upload-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          name: musiczero-termux-arm64-alpha
+          path: musiczero-termux-arm64-alpha.tar.gz
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      ANDROID_NDK_HOME: /opt/android-sdk/ndk/27.0.12077973
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the JDK and system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openjdk-17-jdk-headless libclang-dev unzip curl
+          java -version
+
+      - name: Install the Android SDK and NDK
+        run: |
+          sudo mkdir -p /opt/android-sdk
+          sudo chown -R "$(id -u):$(id -g)" /opt/android-sdk
+          curl -fsSL --retry 3 -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null
+          # build-tools 36.0.0 is the default of the Android Gradle plugin used here.
+          "$sdkmanager" --install "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973"
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Build the APK with the bundled engine
+        run: |
+          chmod +x scripts/build-android.sh android/gradlew
+          ./scripts/build-android.sh
+
+      - uses: actions/upload-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          name: musiczero-android-arm64
+          path: dist/musiczero-android-arm64.apk
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [build, termux-alpha, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist-release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.apk" \) -exec cp {} dist-release/ \;
+          test -n "$(ls -A dist-release)"
+          (cd dist-release && sha256sum musiczero-* > SHA256SUMS)
+          cat dist-release/SHA256SUMS
+
+      - name: Publish to Forgejo
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          server = os.environ.get("GITHUB_SERVER_URL") or os.environ.get("FORGEJO_SERVER_URL") or ""
+          api = os.environ.get("GITHUB_API_URL") or os.environ.get("FORGEJO_API_URL") or f"{server}/api/v1"
+          repository = os.environ.get("GITHUB_REPOSITORY") or os.environ.get("FORGEJO_REPOSITORY") or ""
+          reference = os.environ.get("GITHUB_REF") or os.environ.get("FORGEJO_REF") or ""
+          run_number = os.environ.get("GITHUB_RUN_NUMBER") or os.environ.get("FORGEJO_RUN_NUMBER") or "0"
+          commit = os.environ.get("GITHUB_SHA") or os.environ.get("FORGEJO_SHA") or ""
+          token = os.environ.get("GITHUB_TOKEN") or os.environ.get("FORGEJO_TOKEN") or ""
+
+          if not api.startswith("http") or not repository or not token:
+              raise SystemExit("The Forgejo API URL, repository or token is missing from the environment")
+
+          if reference.startswith("refs/tags/"):
+              tag = reference[len("refs/tags/"):]
+              title = f"Release {tag}"
+              notes = f"Automated release from commit {commit}"
+              prerelease = False
+          else:
+              tag = f"build-{run_number}"
+              title = f"Automatic build #{run_number}"
+              notes = (
+                  f"Built from commit {commit} after Linux x64/ARM64, Windows x64/ARM64 and "
+                  "Android ARM64 builds passed. ARM64 archives are alpha; Android device audio "
+                  "is not hardware-tested."
+              )
+              prerelease = True
+
+          base = f"{api.rstrip('/')}/repos/{repository}"
+
+
+          def call(method, url, payload=None, content_type=None):
+              request = urllib.request.Request(url, data=payload, method=method)
+              request.add_header("Authorization", f"token {token}")
+              if content_type:
+                  request.add_header("Content-Type", content_type)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      raw = response.read()
+                      return response.status, json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as error:
+                  return error.code, error.read()[:500].decode("utf-8", "replace")
+
+
+          status, release = call("GET", f"{base}/releases/tags/{urllib.parse.quote(tag, safe='')}")
+          if status != 200:
+              status, release = call(
+                  "POST",
+                  f"{base}/releases",
+                  json.dumps({
+                      "tag_name": tag,
+                      "name": title,
+                      "body": notes,
+                      "prerelease": prerelease,
+                      "target_commitish": commit,
+                  }).encode(),
+                  "application/json",
+              )
+              if status not in (200, 201):
+                  raise SystemExit(f"Could not create release {tag}: HTTP {status}: {release}")
+              print(f"Created release {tag}")
+          else:
+              print(f"Reusing release {tag}")
+
+          release_id = release["id"]
+          assets = sorted(pathlib.Path("dist-release").iterdir())
+          names = {asset.name for asset in assets if asset.is_file()}
+          for existing in release.get("assets", []):
+              if existing.get("name") in names:
+                  status, detail = call("DELETE", f"{base}/releases/{release_id}/assets/{existing['id']}")
+                  if status not in (200, 204):
+                      raise SystemExit(f"Could not remove {existing.get('name')}: HTTP {status}: {detail}")
+                  print(f"Removed previous asset {existing.get('name')}")
+
+          for asset in assets:
+              status, detail = call(
+                  "POST",
+                  f"{base}/releases/{release_id}/assets?name={urllib.parse.quote(asset.name)}",
+                  asset.read_bytes(),
+                  "application/octet-stream",
+              )
+              if status not in (200, 201):
+                  raise SystemExit(f"Could not upload {asset.name}: HTTP {status}: {detail}")
+              print(f"Uploaded {asset.name} ({asset.stat().st_size} bytes)")
+          PY
